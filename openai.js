@@ -4,6 +4,68 @@ class OpenAIHandler {
     this.siteName = 'OpenAI';
   }
 
+  createNewPromptWindow() {
+    console.log('Creating new OpenAI prompt window...');
+    
+    // Try to find and click a "New Chat" or "Clear" button instead of refreshing
+    const newChatSelectors = [
+      // OpenAI specific selectors - most specific first
+      'a[data-testid="create-new-chat-button"]',
+      'button[data-testid="create-new-chat-button"]',
+      'button[data-testid="new-chat-button"]',
+      'a[data-testid="new-chat-button"]',
+      'button[aria-label*="New chat"]',
+      'button[aria-label*="new chat"]',
+      'button[title*="New chat"]',
+      'button[title*="new chat"]',
+      'button[class*="new-chat"]',
+      'button[class*="New-chat"]',
+      'a[href*="new"]',
+      'button:contains("New")',
+      'button:contains("Clear")',
+      'button:contains("Reset")',
+      '[data-testid="new-chat"]',
+      '[data-testid="clear-chat"]',
+      'button[aria-label="New chat"]',
+      'button[aria-label="Start a new chat"]'
+    ];
+    
+    for (const selector of newChatSelectors) {
+      try {
+        const button = document.querySelector(selector);
+        if (button && button.offsetParent !== null && !button.disabled) {
+          console.log('Found OpenAI new chat button:', selector);
+          button.click();
+          return;
+        }
+      } catch (error) {
+        console.log(`Error with OpenAI selector "${selector}":`, error.message);
+      }
+    }
+    
+    // If no new chat button found, try to clear the input field
+    console.log('No new chat button found, clearing input field instead...');
+    const input = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+    if (input) {
+      if (input.getAttribute('contenteditable') === 'true') {
+        input.textContent = '';
+      } else {
+        input.value = '';
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    
+    // Fallback: if we're not on the right page, navigate without refresh
+    const currentUrl = window.location.href;
+    const baseUrl = 'https://chatgpt.com';
+    
+    if (!currentUrl.startsWith(baseUrl)) {
+      console.log('Navigating to OpenAI chat page...');
+      window.location.href = baseUrl;
+    }
+  }
+
   debugPageStructure() {
     console.log('=== OpenAI Page Structure Debug ===');
     
@@ -77,42 +139,47 @@ class OpenAIHandler {
   }
 
   async findInputField() {
+    console.log('=== findInputField ===');
     // OpenAI-specific selectors
     const selectors = [
-      // OpenAI specific selectors
-      'textarea[placeholder*="Message"]',
-      'textarea[placeholder*="message"]',
-      'textarea[placeholder*="Send a message"]',
-      'textarea[placeholder*="send a message"]',
-      'textarea[placeholder*="Type your message"]',
-      'textarea[placeholder*="type your message"]',
-      'textarea[placeholder*="Ask"]',
-      'textarea[placeholder*="ask"]',
-      'textarea[placeholder*="Type"]',
-      'textarea[placeholder*="type"]',
-      'textarea[placeholder*="Enter"]',
-      'textarea[placeholder*="enter"]',
-      // OpenAI specific data attributes
-      '[data-id="root"] textarea',
-      '[data-testid="chat-input"]',
-      '[data-testid="message-input"]',
-      // OpenAI specific classes
-      '.stretch textarea',
-      '.flex textarea',
-      '.w-full textarea',
-      // Traditional selectors
-      'input[type="text"]',
-      'input[placeholder*="message"]',
-      'input[placeholder*="Message"]',
-      'input[placeholder*="Ask"]',
-      'input[placeholder*="ask"]',
-      'textarea',
-      '[contenteditable="true"]',
-      '[data-testid="input"]',
-      '.input-field',
-      '.message-input',
-      '.chat-input',
-      '.prompt-input',
+      // OpenAI specific selectors based on the actual HTML structure
+      'textarea[name="prompt-textarea"]',
+      'textarea[class*="fallbackTextarea"]',
+    //   'textarea[placeholder*="Ask anything"]',
+    //   'textarea[placeholder*="ask anything"]',
+    //   'textarea[placeholder*="Message"]',
+    //   'textarea[placeholder*="message"]',
+    //   'textarea[placeholder*="Send a message"]',
+    //   'textarea[placeholder*="send a message"]',
+    //   'textarea[placeholder*="Type your message"]',
+    //   'textarea[placeholder*="type your message"]',
+    //   'textarea[placeholder*="Ask"]',
+    //   'textarea[placeholder*="ask"]',
+    //   'textarea[placeholder*="Type"]',
+    //   'textarea[placeholder*="type"]',
+    //   'textarea[placeholder*="Enter"]',
+    //   'textarea[placeholder*="enter"]',
+    //   // OpenAI specific data attributes
+    //   '[data-id="root"] textarea',
+    //   '[data-testid="chat-input"]',
+    //   '[data-testid="message-input"]',
+    //   // OpenAI specific classes
+    //   '.stretch textarea',
+    //   '.flex textarea',
+    //   '.w-full textarea',
+    //   // Traditional selectors
+    //   'input[type="text"]',
+    //   'input[placeholder*="message"]',
+    //   'input[placeholder*="Message"]',
+    //   'input[placeholder*="Ask"]',
+    //   'input[placeholder*="ask"]',
+    //   'textarea',
+    //   '[contenteditable="true"]',
+    //   '[data-testid="input"]',
+    //   '.input-field',
+    //   '.message-input',
+    //   '.chat-input',
+    //   '.prompt-input',
       'form textarea',
       'form input[type="text"]'
     ];
@@ -144,6 +211,23 @@ class OpenAIHandler {
             if (isVisible && isEditable) {
               console.log('Found OpenAI input field with selector:', selector);
               return element;
+            } else if (isEditable && element.style.display === 'none') {
+              // Handle hidden textareas that might become visible when focused
+              console.log('Found hidden OpenAI textarea, attempting to make it visible:', selector);
+              element.style.display = 'block';
+              element.style.visibility = 'visible';
+              element.style.opacity = '1';
+              
+              // Wait a moment for the element to become visible
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              const rect = element.getBoundingClientRect();
+              const isNowVisible = rect.width > 0 && rect.height > 0;
+              
+              if (isNowVisible) {
+                console.log('Successfully made OpenAI textarea visible');
+                return element;
+              }
             }
           }
         }
@@ -153,36 +237,61 @@ class OpenAIHandler {
     }
     
     console.log('No OpenAI input field found with selectors');
+    
+    // Fallback: look for the actual visible input that might be a contenteditable div
+    console.log('Trying fallback to find visible contenteditable input...');
+    const visibleInputs = document.querySelectorAll('[contenteditable="true"], textarea:not([style*="display: none"]), input[type="text"]:not([style*="display: none"])');
+    
+    for (const input of visibleInputs) {
+      const rect = input.getBoundingClientRect();
+      const isVisible = rect.width > 0 && rect.height > 0 && input.offsetParent !== null;
+      
+      if (isVisible) {
+        console.log('Found fallback visible input:', {
+          tagName: input.tagName,
+          contenteditable: input.getAttribute('contenteditable'),
+          placeholder: input.placeholder,
+          classes: input.className
+        });
+        return input;
+      }
+    }
+    
     return null;
   }
 
   async findSubmitButton() {
+    console.log('=== findSubmitButton ===');
     // OpenAI-specific selectors
     const selectors = [
       // Exact match for the specific button structure you found
-      'button[data-testid="send-button"]',
+      'button[id="composer-submit-button"][data-testid="send-button"]',
       'button[id="composer-submit-button"]',
+      'button[data-testid="send-button"]',
       'button[aria-label="Send prompt"]',
       'button[aria-label="Send message"]',
       'button[aria-label="Send"]',
       // OpenAI specific selectors
-      'button[data-testid="send-button"]',
       'button[aria-label*="Send"]',
       'button[aria-label*="send"]',
       'button[title*="Send"]',
       'button[title*="send"]',
       // OpenAI specific classes
+      'button[class*="composer-submit-btn"]',
+      'button[class*="composer-submit-button"]',
       'button[class*="composer-submit"]',
       'button[class*="send"]',
       'button[class*="Send"]',
       'button[class*="submit"]',
       'button[class*="Submit"]',
-      // OpenAI specific button structure
-      'button:has(svg)',
-      'button:has([data-icon="send"])',
-      'button:has([data-icon="arrow"])',
-      'button:has([data-icon="paper-plane"])',
-      'button:has([data-icon="send-message"])',
+      // OpenAI specific button structure with SVG icon
+    //   'button:has(svg.icon)',
+    //   'button:has(svg[class*="icon"])',
+    //   'button:has(svg path[d*="M8.99992 16V6.41407"])',
+    //   'button:has([data-icon="send"])',
+    //   'button:has([data-icon="arrow"])',
+    //   'button:has([data-icon="paper-plane"])',
+    //   'button:has([data-icon="send-message"])',
       // Traditional selectors
       'button[type="submit"]',
       'button[aria-label*="Submit"]',
@@ -192,16 +301,16 @@ class OpenAIHandler {
       'button[data-testid="submit"]',
       '.send-button',
       '.submit-button',
-      'button:last-child',
+    //   'button:last-child',
       // Look for buttons near the input field
       'textarea + button',
       'input + button',
       '[contenteditable="true"] + button',
       // Look for buttons with specific text content
-      'button:contains("Send")',
-      'button:contains("Submit")',
-      'button:contains("→")',
-      'button:contains("➤")'
+    //   'button:contains("Send")',
+    //   'button:contains("Submit")',
+    //   'button:contains("→")',
+    //   'button:contains("➤")'
     ];
     
     console.log('Searching for OpenAI submit button...');
@@ -232,8 +341,9 @@ class OpenAIHandler {
             });
             
             // Prioritize exact matches for the specific button structure
-            const isExactMatch = element.getAttribute('data-testid') === 'send-button' || 
+            const isExactMatch = (element.getAttribute('data-testid') === 'send-button' && element.id === 'composer-submit-button') || 
                                element.id === 'composer-submit-button' ||
+                               element.getAttribute('data-testid') === 'send-button' ||
                                element.getAttribute('aria-label') === 'Send prompt';
             
             if (isVisible && (isExactMatch || isNearInput)) {
@@ -266,6 +376,13 @@ class OpenAIHandler {
       return specificButton;
     }
     
+    // Look for the exact button with the specific classes
+    const exactButton = document.querySelector('button.composer-submit-btn.composer-submit-button-color');
+    if (exactButton && exactButton.offsetParent !== null && !exactButton.disabled) {
+      console.log('Found exact OpenAI button with specific classes as final fallback');
+      return exactButton;
+    }
+    
     // Look for any button with the composer-submit class
     const composerButton = document.querySelector('button[class*="composer-submit"]');
     if (composerButton && composerButton.offsetParent !== null && !composerButton.disabled) {
@@ -278,6 +395,7 @@ class OpenAIHandler {
   }
 
   isNearInputField(button) {
+    console.log('=== isNearInputField ===');
     const input = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
     if (!input || !button) return false;
     
@@ -306,6 +424,7 @@ class OpenAIHandler {
   }
 
   findNearbyButton(input) {
+    console.log('=== findNearbyButton ===');
     if (!input) return null;
     
     // Look for buttons in the same container or nearby
@@ -326,6 +445,7 @@ class OpenAIHandler {
   }
 
   findChatContainer() {
+    console.log('=== findChatContainer ===');
     console.log('Finding OpenAI chat container...');
     
     // OpenAI-specific selectors
@@ -386,7 +506,7 @@ class OpenAIHandler {
   }
 
   async extractLatestResponse() {
-    console.log(" - - - - - - ")
+    console.log('=== extractLatestResponse ===');
     console.log('Extracting latest OpenAI response...');
     
     // First try to get markdown content using copy button
@@ -395,9 +515,6 @@ class OpenAIHandler {
     //   console.log('Successfully extracted OpenAI response using copy button');
     //   return markdownContent;
     // }
-    
-    // Fallback to the original text extraction method
-    console.log('Copy button method failed, falling back to text extraction...');
     
     // Get the current prompt from the input field to help identify user messages
     const input = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
@@ -451,7 +568,7 @@ class OpenAIHandler {
     for (const selector of responseSelectors) {
       try {
         const elements = document.querySelectorAll(selector);
-        console.log(`OpenAI selector "${selector}" found ${elements.length} elements`);
+        // console.log(`OpenAI selector "${selector}" found ${elements.length} elements`);
         
         if (elements.length > 0) {
           const lastElement = elements[elements.length - 1];
@@ -470,20 +587,20 @@ class OpenAIHandler {
           
           const text = lastElement.textContent || lastElement.innerText || '';
           
-          console.log(`Last OpenAI element with selector "${selector}":`, {
-            hasLoading,
-            hasCompletionIndicator,
-            hasCursor,
-            textLength: text.length,
-            textPreview: text.substring(0, 100) + '...',
-            isSubstantial: text.trim().length > 20
-          });
+        //   console.log(`Last OpenAI element with selector "${selector}":`, {
+        //     hasLoading,
+        //     hasCompletionIndicator,
+        //     hasCursor,
+        //     textLength: text.length,
+        //     textPreview: text.substring(0, 100) + '...',
+        //     isSubstantial: text.trim().length > 20
+        //   });
           
           // Only return response if it's substantial and not actively streaming
           if (!hasLoading && !hasCursor && text.trim().length > 20) {
             // Use the new completion detection function
             if (this.isResponseComplete(lastElement)) {
-              console.log('Found complete OpenAI response with selector:', selector);
+            //   console.log('Found complete OpenAI response with selector:', selector);
               return text;
             }
           }
@@ -524,27 +641,28 @@ class OpenAIHandler {
   }
 
   async extractMarkdownViaCopyButton() {
+    console.log('=== extractMarkdownViaCopyButton ===');
     console.log('Attempting to extract OpenAI response using copy button...');
     
     // Find the latest response container that has a copy button
     const copyButtonSelectors = [
       // OpenAI specific copy button selectors (from your example)
       'button[data-testid="copy-turn-action-button"]',
-      'button[aria-label="Copy"]',
-      'button[aria-label="copy"]',
-      'button[title="Copy"]',
-      'button[title="copy"]',
+    //   'button[aria-label="Copy"]',
+    //   'button[aria-label="copy"]',
+    //   'button[title="Copy"]',
+    //   'button[title="copy"]',
       // More specific selectors based on your HTML example
     //   'button[class*="text-token-text-secondary"][class*="hover:bg-token-bg-secondary"]',
     //   'button[data-state="closed"]',
       // More generic copy button selectors
-      'button:has(svg[data-icon="copy"])',
-      'button:has(svg[data-icon="Copy"])',
-      'button[class*="copy"]',
-      'button[class*="Copy"]',
-      // Look for buttons with copy-related text or icons
-      'button:has([class*="copy"])',
-      'button:has([class*="Copy"])',
+    //   'button:has(svg[data-icon="copy"])',
+    //   'button:has(svg[data-icon="Copy"])',
+    //   'button[class*="copy"]',
+    //   'button[class*="Copy"]',
+    //   // Look for buttons with copy-related text or icons
+    //   'button:has([class*="copy"])',
+    //   'button:has([class*="Copy"])',
       // Look for buttons with SVG icons that might be copy buttons
     //   'button:has(svg)'
     ];
@@ -562,19 +680,19 @@ class OpenAIHandler {
     }
     
     // Also look for buttons with the specific SVG path from your example
-    const buttonsWithSVG = document.querySelectorAll('button:has(svg)');
-    console.log(`Found ${buttonsWithSVG.length} buttons with SVG icons`);
-    for (const button of buttonsWithSVG) {
-      const svg = button.querySelector('svg');
-      if (svg) {
-        const path = svg.querySelector('path');
-        if (path && path.getAttribute('d') && path.getAttribute('d').includes('M12.668 10.667')) {
-          // This matches the SVG path from your example
-          allCopyButtons.push(button);
-          console.log('Found copy button with matching SVG path');
-        }
-      }
-    }
+    // const buttonsWithSVG = document.querySelectorAll('button:has(svg)');
+    // console.log(`Found ${buttonsWithSVG.length} buttons with SVG icons`);
+    // for (const button of buttonsWithSVG) {
+    //   const svg = button.querySelector('svg');
+    //   if (svg) {
+    //     const path = svg.querySelector('path');
+    //     if (path && path.getAttribute('d') && path.getAttribute('d').includes('M12.668 10.667')) {
+    //       // This matches the SVG path from your example
+    //       allCopyButtons.push(button);
+    //       console.log('Found copy button with matching SVG path');
+    //     }
+    //   }
+    // }
     
     console.log(`Found ${allCopyButtons.length} total potential copy buttons`);
     
@@ -675,6 +793,7 @@ class OpenAIHandler {
   }
 
   findResponseContainerForCopyButton(copyButton) {
+    console.log('=== findResponseContainerForCopyButton ===');
     // Try to find the response container that contains this copy button
     let container = copyButton.parentElement;
     let depth = 0;
@@ -704,6 +823,7 @@ class OpenAIHandler {
   }
 
   extractTextFromContainer(container) {
+    console.log('=== extractTextFromContainer ===');
     if (!container) return null;
     
     // Try to find the main content area within the container
@@ -739,6 +859,7 @@ class OpenAIHandler {
   }
 
   isResponseComplete(responseElement) {
+    console.log('=== isResponseComplete ===');
     if (!responseElement) return false;
     
     // Check for explicit completion indicators
@@ -796,13 +917,13 @@ class OpenAIHandler {
     const hasSubstantialLength = text.trim().length > 50;
     const hasCompleteSentences = /[.!?]/.test(text); // Contains at least one sentence ending
     
-    console.log('OpenAI response completion analysis:', {
-      hasEndingPattern,
-      hasSubstantialLength,
-      hasCompleteSentences,
-      textLength: text.length,
-      textEnding: text.trim().slice(-20)
-    });
+    // console.log('OpenAI response completion analysis:', {
+    //   hasEndingPattern,
+    //   hasSubstantialLength,
+    //   hasCompleteSentences,
+    //   textLength: text.length,
+    //   textEnding: text.trim().slice(-20)
+    // });
     
     // Response is complete if it has substantial content and either ends properly or has complete sentences
     return hasSubstantialLength && (hasEndingPattern || hasCompleteSentences);
@@ -903,6 +1024,7 @@ class OpenAIHandler {
   }
 
   findNearbyClickable(input) {
+    console.log('=== findNearbyClickable ===');
     if (!input) return null;
     
     // Look for any clickable element near the input

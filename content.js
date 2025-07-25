@@ -2,6 +2,12 @@ let isProcessing = false;
 let responseObserver = null;
 let siteHandler = null;
 
+// Configuration options
+const CONFIG = {
+  createFreshWindow: true, // Set to false to disable fresh window creation
+  freshWindowTimeout: 5000 // Timeout for fresh window creation in ms (increased for better reliability)
+};
+
 // Site detection and handler initialization
 function detectSiteAndInitialize() {
   const hostname = window.location.hostname;
@@ -49,6 +55,60 @@ async function submitPrompt(prompt) {
   try {
     isProcessing = true;
     console.log(`Submitting prompt to ${siteHandler.siteName}:`, prompt);
+
+    // Create a new prompt fresh window and wait for navigation to complete
+    if (CONFIG.createFreshWindow) {
+      await createFreshPromptWindow();
+      
+      // Add additional delay and page readiness check after fresh window creation
+      console.log('Waiting for page to be fully ready after fresh window creation...');
+      
+      // Wait for document to be ready
+      if (document.readyState !== 'complete') {
+        console.log('Document not ready, waiting for load event...');
+        await new Promise(resolve => {
+          if (document.readyState === 'complete') {
+            resolve();
+          } else {
+            window.addEventListener('load', resolve, { once: true });
+          }
+        });
+      }
+      
+      // Additional delay to ensure DOM is fully rendered and any dynamic content is loaded
+      console.log('Waiting additional 3 seconds for DOM to be fully rendered...');
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Double-check that we're on a fresh page by verifying the input field is empty
+      console.log('Verifying we have a fresh input field...');
+      let attempts = 0;
+      const maxAttempts = 5;
+      
+      while (attempts < maxAttempts) {
+        const testInput = await siteHandler.findInputField();
+        if (testInput) {
+          const currentContent = testInput.textContent || testInput.value;
+          console.log(`Attempt ${attempts + 1}: Found input field with content: "${currentContent}"`);
+          
+          if (!currentContent || currentContent.trim() === '') {
+            console.log('Found fresh input field, proceeding...');
+            break;
+          } else {
+            console.log('Input field still has content, waiting longer...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+          }
+        } else {
+          console.log(`Attempt ${attempts + 1}: No input field found, waiting...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+      }
+      
+      if (attempts >= maxAttempts) {
+        console.log('Warning: Could not verify fresh input field after multiple attempts');
+      }
+    }
     
     // Clear response cache for new prompt
     if (siteHandler.clearResponseCache) {
@@ -58,8 +118,8 @@ async function submitPrompt(prompt) {
     // Debug page structure
     siteHandler.debugPageStructure();
     
-    // Wait for page to be fully loaded
-    await waitForElement('textarea, input[type="text"]', 10000);
+    // Wait for page to be fully loaded with longer timeout
+    await waitForElement('textarea, input[type="text"]', 15000);
     
     // Find the input field using site-specific handler
     const input = await siteHandler.findInputField();
@@ -67,24 +127,101 @@ async function submitPrompt(prompt) {
     if (!input) {
       throw new Error(`Could not find input field on ${siteHandler.siteName}`);
     }
+
+    // Add debug logging here
+    console.log('=== Setting Prompt ===');
+    console.log('Input element:', {
+      tagName: input.tagName,
+      contenteditable: input.getAttribute('contenteditable'),
+      classes: input.className,
+      currentValue: input.textContent || input.value,
+      isVisible: input.offsetParent !== null,
+      rect: input.getBoundingClientRect()
+    });
     
     // Clear and set new prompt
     if (input.getAttribute('contenteditable') === 'true') {
-      // Handle contenteditable elements
+      console.log('Setting contenteditable input with prompt:', prompt);
+      
+      // Method 1: Clear first
+      input.textContent = '';
+      input.innerHTML = '';
+      
+      // Method 2: Try different setting approaches
       input.textContent = prompt;
+      console.log('After setting textContent:', input.textContent);
+      
+      // Method 3: Also try innerHTML for contenteditable
+      if (input.textContent !== prompt) {
+        console.log('textContent failed, trying innerHTML...');
+        input.innerHTML = prompt;
+        console.log('After setting innerHTML:', input.innerHTML);
+      }
+      
+      // Method 4: Focus the element first and try again
+      input.focus();
+      input.textContent = prompt;
+      console.log('After focus + textContent:', input.textContent);
+      
+      // Method 5: Try using execCommand for contenteditable
+      if (input.textContent !== prompt) {
+        console.log('textContent still failed, trying execCommand...');
+        input.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, prompt);
+        console.log('After execCommand:', input.textContent);
+      }
+      
+      console.log('After setting, textContent:', input.textContent, 'innerHTML:', input.innerHTML);
+      
+      // Dispatch events
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
-      // Also trigger composition events for better compatibility
       input.dispatchEvent(new CompositionEvent('compositionend', { data: prompt, bubbles: true }));
+      
+      console.log('After events, textContent:', input.textContent);
     } else {
-      // Handle regular input/textarea elements
+      console.log('Setting regular input with prompt:', prompt);
       input.value = prompt;
+      console.log('After setting value:', input.value);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('After dispatching events, value:', input.value);
     }
     
     // Wait a moment for the input to be processed
     await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Verify the input still exists and has the correct content
+    const inputStillExists = document.contains(input);
+    const currentContent = input.textContent || input.value;
+    console.log('Input verification after 500ms:', {
+      stillExists: inputStillExists,
+      currentContent: currentContent,
+      expectedContent: prompt,
+      matches: currentContent === prompt
+    });
+
+    if (!inputStillExists) {
+      console.log('Input field was replaced, finding new one...');
+      const newInput = await siteHandler.findInputField();
+      if (newInput) {
+        console.log('Found new input field, setting prompt again...');
+        // Set prompt on the new input field
+        if (newInput.getAttribute('contenteditable') === 'true') {
+          newInput.textContent = prompt;
+          newInput.dispatchEvent(new Event('input', { bubbles: true }));
+          newInput.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          newInput.value = prompt;
+          newInput.dispatchEvent(new Event('input', { bubbles: true }));
+          newInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+    }
+    
+    // Add verification after the wait
+    console.log('After 500ms wait, input content:', input.textContent || input.value);
     
     // Find and click submit button using site-specific handler
     const submitButton = await siteHandler.findSubmitButton();
@@ -300,9 +437,111 @@ async function waitForElement(selector, timeout = 5000) {
   });
 }
 
+async function createFreshPromptWindow() {
+    console.log("* * * * * * * * *")
+  console.log(`Creating fresh prompt window for ${siteHandler.siteName}...`);
+  
+  // Store the current URL to detect navigation
+  const currentUrl = window.location.href;
+  
+  // Call the site-specific method to create a new window
+  siteHandler.createNewPromptWindow();
+  
+  // Wait for navigation to complete or timeout
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      console.log(`Fresh window creation timeout for ${siteHandler.siteName}, continuing anyway...`);
+      resolve();
+    }, CONFIG.freshWindowTimeout);
+    
+    const checkNavigation = () => {
+      // If the URL has changed, navigation is complete
+      if (window.location.href !== currentUrl) {
+        console.log(`Navigation completed for ${siteHandler.siteName}`);
+        clearTimeout(timeout);
+        resolve();
+        return;
+      }
+      
+      // If we're still on the same URL but it's a reload, check if page is ready
+      if (document.readyState === 'complete') {
+        console.log(`Page reload completed for ${siteHandler.siteName}`);
+        clearTimeout(timeout);
+        resolve();
+        return;
+      }
+      
+      // For non-refresh approaches, wait a bit then resolve
+      setTimeout(() => {
+        console.log(`Fresh window creation completed for ${siteHandler.siteName} (non-refresh approach)`);
+        clearTimeout(timeout);
+        resolve();
+      }, CONFIG.freshWindowTimeout);
+    };
+    
+    // Start checking for navigation completion
+    checkNavigation();
+  });
+}
+
 // Handle page unload
 window.addEventListener('beforeunload', () => {
   if (responseObserver) {
     responseObserver.disconnect();
   }
 });
+
+// Manual testing function - can be called from browser console
+async function testPromptSetting(prompt = "test prompt") {
+  console.log('=== Manual Prompt Setting Test ===');
+  const input = await siteHandler.findInputField();
+  
+  if (!input) {
+    console.error('No input field found for testing');
+    return false;
+  }
+  
+  console.log('Testing with input:', {
+    tagName: input.tagName,
+    contenteditable: input.getAttribute('contenteditable'),
+    classes: input.className,
+    currentContent: input.textContent || input.value
+  });
+  
+  // Try setting the prompt
+  if (input.getAttribute('contenteditable') === 'true') {
+    console.log('Setting contenteditable input...');
+    input.textContent = prompt;
+    console.log('After textContent:', input.textContent);
+    
+    if (input.textContent !== prompt) {
+      console.log('textContent failed, trying innerHTML...');
+      input.innerHTML = prompt;
+      console.log('After innerHTML:', input.innerHTML);
+    }
+    
+    if (input.textContent !== prompt && input.innerHTML !== prompt) {
+      console.log('Both failed, trying execCommand...');
+      input.focus();
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, prompt);
+      console.log('After execCommand:', input.textContent);
+    }
+  } else {
+    console.log('Setting regular input...');
+    input.value = prompt;
+    console.log('After setting value:', input.value);
+  }
+  
+  // Wait and check
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  const finalContent = input.textContent || input.value;
+  console.log('Final content:', finalContent);
+  console.log('Success:', finalContent === prompt);
+  
+  return finalContent === prompt;
+}
+
+// Make the function available globally for console access
+window.testPromptSetting = testPromptSetting;

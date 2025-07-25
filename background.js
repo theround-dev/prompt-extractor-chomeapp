@@ -46,7 +46,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       isRunning = false;
       console.log('All prompts completed');
       // Save all responses to a file
-      saveResponsesToFile();
+      try {
+        saveResponsesToFile();
+      } catch (error) {
+        console.error('Failed to save responses to file:', error);
+        // Ensure responses are at least saved to storage
+        chrome.storage.local.set({ 
+          responses: responses,
+          completed_timestamp: new Date().toISOString()
+        });
+      }
     }
   } else if (request.type === "error") {
     console.error('Content script error:', request.error);
@@ -170,25 +179,47 @@ async function findTargetTab(site) {
 }
 
 function saveResponsesToFile() {
-  const data = {
-    timestamp: new Date().toISOString(),
-    totalPrompts: prompts.length,
-    site: currentSite,
-    responses: responses
-  };
-  
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  
-  const filename = `${currentSite}_responses_${new Date().toISOString().split('T')[0]}.json`;
-  
-  chrome.downloads.download({
-    url: url,
-    filename: filename,
-    saveAs: true
-  }, () => {
-    URL.revokeObjectURL(url);
-  });
+  try {
+    const data = {
+      timestamp: new Date().toISOString(),
+      totalPrompts: prompts.length,
+      site: currentSite,
+      responses: responses
+    };
+    
+    const jsonString = JSON.stringify(data, null, 2);
+    const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonString);
+    
+    const filename = `${currentSite}_responses_${new Date().toISOString().split('T')[0]}.json`;
+    
+    chrome.downloads.download({
+      url: dataUrl,
+      filename: filename,
+      saveAs: true
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error('Download failed:', chrome.runtime.lastError);
+        // Fallback: save to storage
+        chrome.storage.local.set({ 
+          responses_backup: responses,
+          backup_timestamp: new Date().toISOString()
+        }, () => {
+          console.log('Responses saved to storage as backup');
+        });
+      } else {
+        console.log('Download started with ID:', downloadId);
+      }
+    });
+  } catch (error) {
+    console.error('Error saving responses to file:', error);
+    // Fallback: try to save to storage
+    chrome.storage.local.set({ 
+      responses_backup: responses,
+      backup_timestamp: new Date().toISOString()
+    }, () => {
+      console.log('Responses saved to storage as backup');
+    });
+  }
 }
 
 // Handle tab updates

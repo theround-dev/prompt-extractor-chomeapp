@@ -9,6 +9,61 @@ class DeepSeekHandler {
     console.log('Clearing DeepSeek response cache (no-op)');
   }
 
+  createNewPromptWindow() {
+    console.log('Creating new DeepSeek prompt window...');
+    
+    // Try to find and click a "New Chat" or "Clear" button instead of refreshing
+    const newChatSelectors = [
+      'button[aria-label*="New chat"]',
+      'button[aria-label*="new chat"]',
+      'button[title*="New chat"]',
+      'button[title*="new chat"]',
+      'button[class*="new-chat"]',
+      'button[class*="New-chat"]',
+      'a[href*="new"]',
+      'button:contains("New")',
+      'button:contains("Clear")',
+      'button:contains("Reset")',
+      '[data-testid="new-chat"]',
+      '[data-testid="clear-chat"]'
+    ];
+    
+    for (const selector of newChatSelectors) {
+      try {
+        const button = document.querySelector(selector);
+        if (button && button.offsetParent !== null && !button.disabled) {
+          console.log('Found DeepSeek new chat button:', selector);
+          button.click();
+          return;
+        }
+      } catch (error) {
+        console.log(`Error with DeepSeek selector "${selector}":`, error.message);
+      }
+    }
+    
+    // If no new chat button found, try to clear the input field
+    console.log('No new chat button found, clearing input field instead...');
+    const input = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+    if (input) {
+      if (input.getAttribute('contenteditable') === 'true') {
+        input.textContent = '';
+      } else {
+        input.value = '';
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    
+    // Fallback: if we're not on the right page, navigate without refresh
+    const currentUrl = window.location.href;
+    const baseUrl = 'https://chat.deepseek.com';
+    
+    if (!currentUrl.startsWith(baseUrl)) {
+      console.log('Navigating to DeepSeek chat page...');
+      window.location.href = baseUrl;
+    }
+  }
+
   debugPageStructure() {
     console.log('=== DeepSeek Page Structure Debug ===');
     
@@ -637,6 +692,96 @@ class DeepSeekHandler {
     }
     
     return null;
+  }
+
+  async extractMarkdownViaCopyButton(response) {
+    console.log('Attempting to extract DeepSeek response using copy button...');
+    
+    // For DeepSeek, we'll use the response text directly since copy button functionality may vary
+    // This is a simplified implementation - you can enhance it if DeepSeek has copy buttons
+    if (response && response.trim().length > 0) {
+      console.log('Using provided response text for DeepSeek');
+      return response;
+    }
+    
+    // Fallback: try to find copy buttons and extract content
+    const copyButtonSelectors = [
+      'button[aria-label="Copy"]',
+      'button[aria-label="copy"]',
+      'button[title="Copy"]',
+      'button[title="copy"]',
+      'button[class*="copy"]',
+      'button[class*="Copy"]',
+      'button:has(svg[data-icon="copy"])',
+      'button:has(svg[data-icon="Copy"])'
+    ];
+    
+    let allCopyButtons = [];
+    for (const selector of copyButtonSelectors) {
+      try {
+        const buttons = document.querySelectorAll(selector);
+        allCopyButtons = allCopyButtons.concat(Array.from(buttons));
+      } catch (error) {
+        console.log(`Error with copy button selector "${selector}":`, error.message);
+      }
+    }
+    
+    // Remove duplicates and filter visible buttons
+    allCopyButtons = [...new Set(allCopyButtons)].filter(button => 
+      button.offsetParent !== null && 
+      !button.disabled && 
+      button.getBoundingClientRect().width > 0 &&
+      button.getBoundingClientRect().height > 0
+    );
+    
+    if (allCopyButtons.length === 0) {
+      console.log('No copy buttons found for DeepSeek, returning null');
+      return null;
+    }
+    
+    // Get the last copy button (most recent response)
+    const lastCopyButton = allCopyButtons[allCopyButtons.length - 1];
+    
+    // Store original clipboard content
+    let originalClipboard = '';
+    try {
+      originalClipboard = await navigator.clipboard.readText();
+    } catch (error) {
+      console.log('Could not read original clipboard:', error.message);
+    }
+    
+    // Click the copy button
+    console.log('Clicking DeepSeek copy button...');
+    lastCopyButton.click();
+    
+    // Wait for clipboard to be updated
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Read the clipboard content
+    let markdownContent = '';
+    try {
+      markdownContent = await navigator.clipboard.readText();
+      console.log('Successfully read DeepSeek clipboard content, length:', markdownContent.length);
+    } catch (error) {
+      console.log('Failed to read DeepSeek clipboard:', error.message);
+      return null;
+    }
+    
+    // Restore original clipboard content
+    try {
+      await navigator.clipboard.writeText(originalClipboard);
+    } catch (error) {
+      console.log('Could not restore original clipboard:', error.message);
+    }
+    
+    // Validate that we got meaningful content
+    if (markdownContent && markdownContent.trim().length > 20) {
+      console.log('Successfully extracted DeepSeek markdown content via copy button');
+      return markdownContent.trim();
+    } else {
+      console.log('DeepSeek clipboard content is empty or too short');
+      return null;
+    }
   }
 }
 
