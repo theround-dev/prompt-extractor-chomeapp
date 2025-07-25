@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "AI Chat Automator",
+  "version": "1.0",
+  "description": "Automates prompts with DeepSeek Chat and OpenAI Chat",
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "activeTab",
+    "downloads",
+    "clipboardRead",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://chat.deepseek.com/*",
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.svg"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["deepseek.js", "content.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["openai.js", "content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
