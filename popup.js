@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', function() {
   const startBtn = document.getElementById('startBtn');
   const stopBtn = document.getElementById('stopBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
   const status = document.getElementById('status');
   const progress = document.getElementById('progress');
   const progressText = document.getElementById('progressText');
@@ -24,6 +25,25 @@ document.addEventListener('DOMContentLoaded', function() {
   stopBtn.addEventListener('click', function() {
     chrome.runtime.sendMessage({ type: 'stopAutomation' }, function(response) {
       updateStatus();
+    });
+  });
+  
+  // Download button click
+  downloadBtn.addEventListener('click', function() {
+    chrome.runtime.sendMessage({ type: 'downloadResponses' }, function(response) {
+      if (response && response.success) {
+        status.textContent = 'Download started successfully';
+        status.className = 'status running';
+        setTimeout(() => {
+          updateStatus();
+        }, 2000);
+      } else {
+        status.textContent = 'Download failed: ' + (response?.error || 'Unknown error');
+        status.className = 'status stopped';
+        setTimeout(() => {
+          updateStatus();
+        }, 3000);
+      }
     });
   });
   

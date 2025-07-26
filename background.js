@@ -111,6 +111,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       responsesCount: responses.length,
       currentSite: currentSite
     });
+  } else if (request.type === "downloadResponses") {
+    try {
+      saveResponsesToFile();
+      sendResponse({ success: true });
+    } catch (error) {
+      console.error('Failed to download responses:', error);
+      sendResponse({ success: false, error: error.message });
+    }
   }
 });
 
