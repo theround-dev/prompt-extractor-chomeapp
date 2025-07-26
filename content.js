@@ -5,7 +5,8 @@ let siteHandler = null;
 // Configuration options
 const CONFIG = {
   createFreshWindow: true, // Set to false to disable fresh window creation
-  freshWindowTimeout: 5000 // Timeout for fresh window creation in ms (increased for better reliability)
+  freshWindowTimeout: 5000, // Timeout for fresh window creation in ms (increased for better reliability)
+  enableFollowUpQuestions: true // Set to false to disable follow-up questions for metadata
 };
 
 // Site detection and handler initialization
@@ -54,7 +55,9 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
 async function submitPrompt(prompt) {
   try {
     isProcessing = true;
-    console.log(`Submitting prompt to ${siteHandler.siteName}:`, prompt);
+    // Extract the prompt text from the prompt object or use as-is if it's already a string
+    const promptText = prompt.text || prompt;
+    console.log(`Submitting prompt to ${siteHandler.siteName}:`, promptText);
 
     // Create a new prompt fresh window and wait for navigation to complete
     if (CONFIG.createFreshWindow) {
@@ -141,34 +144,34 @@ async function submitPrompt(prompt) {
     
     // Clear and set new prompt
     if (input.getAttribute('contenteditable') === 'true') {
-      console.log('Setting contenteditable input with prompt:', prompt);
+      console.log('Setting contenteditable input with prompt:', promptText);
       
       // Method 1: Clear first
       input.textContent = '';
       input.innerHTML = '';
       
       // Method 2: Try different setting approaches
-      input.textContent = prompt;
+      input.textContent = promptText;
       console.log('After setting textContent:', input.textContent);
       
       // Method 3: Also try innerHTML for contenteditable
-      if (input.textContent !== prompt) {
+      if (input.textContent !== promptText) {
         console.log('textContent failed, trying innerHTML...');
-        input.innerHTML = prompt;
+        input.innerHTML = promptText;
         console.log('After setting innerHTML:', input.innerHTML);
       }
       
       // Method 4: Focus the element first and try again
       input.focus();
-      input.textContent = prompt;
+      input.textContent = promptText;
       console.log('After focus + textContent:', input.textContent);
       
       // Method 5: Try using execCommand for contenteditable
-      if (input.textContent !== prompt) {
+      if (input.textContent !== promptText) {
         console.log('textContent still failed, trying execCommand...');
         input.focus();
         document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, prompt);
+        document.execCommand('insertText', false, promptText);
         console.log('After execCommand:', input.textContent);
       }
       
@@ -181,8 +184,8 @@ async function submitPrompt(prompt) {
       
       console.log('After events, textContent:', input.textContent);
     } else {
-      console.log('Setting regular input with prompt:', prompt);
-      input.value = prompt;
+      console.log('Setting regular input with prompt:', promptText);
+      input.value = promptText;
       console.log('After setting value:', input.value);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -198,8 +201,8 @@ async function submitPrompt(prompt) {
     console.log('Input verification after 500ms:', {
       stillExists: inputStillExists,
       currentContent: currentContent,
-      expectedContent: prompt,
-      matches: currentContent === prompt
+      expectedContent: promptText,
+      matches: currentContent === promptText
     });
 
     if (!inputStillExists) {
@@ -229,7 +232,7 @@ async function submitPrompt(prompt) {
     if (!submitButton) {
       // Try alternative submission methods using site-specific handler
       console.log(`Submit button not found on ${siteHandler.siteName}, trying alternative methods...`);
-      const success = await siteHandler.tryAlternativeSubmission(input, prompt);
+      const success = await siteHandler.tryAlternativeSubmission(input, promptText);
       if (!success) {
         throw new Error(`Could not find submit button or alternative submission method on ${siteHandler.siteName}`);
       }
@@ -239,7 +242,36 @@ async function submitPrompt(prompt) {
     }
     
     // Wait for response to complete
-    await waitForResponse(prompt);
+    const finalResponse = await waitForResponse(prompt, promptText);
+    
+    // Handle follow-up question for metadata if enabled
+    let metadataResponse = null;
+    if (CONFIG.enableFollowUpQuestions) {
+      try {
+        metadataResponse = await handleFollowUpQuestion(prompt, finalResponse);
+      } catch (error) {
+        console.error('Error in follow-up question process:', error);
+        // Continue without metadata if follow-up fails
+        metadataResponse = null;
+      }
+    }
+    
+    // Send the main response back to background script with metadata
+    chrome.runtime.sendMessage({
+      type: "saveResponse",
+      prompt: prompt.text || prompt, // Handle both prompt object and string
+      response: finalResponse,
+      site: siteHandler.siteName,
+      promptId: prompt.id,
+      category: prompt.category,
+      tags: prompt.tags,
+      measurements: prompt.measurements,
+      brandId: prompt.brand_id,
+      approved: prompt.approved,
+      active: prompt.active,
+      createdAt: prompt.created_at,
+      metadata: metadataResponse // Add metadata if available
+    });
     
   } catch (error) {
     console.error(`Error submitting prompt to ${siteHandler.siteName}:`, error);
@@ -252,15 +284,35 @@ async function submitPrompt(prompt) {
   }
 }
 
-async function waitForResponse(prompt) {
+async function waitForResponse(prompt, promptText, options = {}) {
+  // Default options for main responses
+  const defaultOptions = {
+    isFollowUp: false,
+    timeout: 300000, // 5 minutes for main responses
+    requiredStableChecks: 3,
+    stabilityInterval: 2000,
+    fallbackTimeout: 60000, // 1 minute fallback
+    startStabilityCheckDelay: 3000
+  };
+  
+  // Override defaults for follow-up responses
+  if (options.isFollowUp) {
+    defaultOptions.timeout = 240000; // 4 minutes for follow-up (increased from 3)
+    defaultOptions.requiredStableChecks = 2;
+    defaultOptions.stabilityInterval = 1500;
+    defaultOptions.fallbackTimeout = 120000; // 2 minutes fallback (increased from 1.5)
+    defaultOptions.startStabilityCheckDelay = 2000;
+  }
+  
+  const config = { ...defaultOptions, ...options };
+  const responseType = config.isFollowUp ? 'follow-up' : 'main';
+  
   return new Promise((resolve, reject) => {
     let responseObserver = null;
     let stabilityCheck = null;
     let lastResponseText = '';
     let stableCount = 0;
-    let isResolved = false; // Flag to prevent multiple resolutions
-    const requiredStableChecks = 3; // Number of consecutive stable checks needed
-    const stabilityInterval = 2000; // Check every 2 seconds
+    let isResolved = false;
     
     const cleanup = () => {
       if (responseObserver) {
@@ -275,8 +327,8 @@ async function waitForResponse(prompt) {
     
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error('Response timeout'));
-    }, 300000); // 5 minute timeout for longer responses
+      reject(new Error(`${responseType} response timeout`));
+    }, config.timeout);
     
     // Add a fallback timeout for capturing response even if not perfectly stable
     const fallbackTimeout = setTimeout(async () => {
@@ -285,37 +337,31 @@ async function waitForResponse(prompt) {
       }
       const currentResponse = await siteHandler.extractLatestResponse();
       if (currentResponse && currentResponse.trim().length > 0) {
-        console.log('Fallback timeout reached, capturing response even if not perfectly stable');
+        console.log(`Fallback timeout reached for ${responseType} response, capturing response even if not perfectly stable`);
         handleResponse(currentResponse, 'fallback timeout');
       }
-    }, 60000); // 1 minute fallback timeout
+    }, config.fallbackTimeout);
     
-    console.log(`Starting to wait for ${siteHandler.siteName} response...`);
+    console.log(`Starting to wait for ${siteHandler.siteName} ${responseType} response...`);
     
-    const handleResponse = (response, source) => {
+    const handleResponse = async (response, source) => {
       if (isResolved) {
-        console.log(`${siteHandler.siteName} response already handled, skipping duplicate`);
+        console.log(`${siteHandler.siteName} ${responseType} response already handled, skipping duplicate`);
         return;
       }
       
       isResolved = true;
       clearTimeout(timeout);
-      clearTimeout(fallbackTimeout); // Clear fallback timeout on successful response
+      clearTimeout(fallbackTimeout);
       cleanup();
       
-      console.log(`${siteHandler.siteName} response received via ${source}, length:`, response.length);
-      // extract the markdown from the response
-      siteHandler.extractMarkdownViaCopyButton(response).then(markdown => {
-        // Send response back to background script
-        chrome.runtime.sendMessage({
-          type: "saveResponse",
-          prompt: prompt,
-          response: (markdown || response).trim(),
-          site: siteHandler.siteName
-        });
-      });
+      console.log(`${siteHandler.siteName} ${responseType} response received via ${source}, length:`, response.length);
       
-      resolve();
+      // Extract markdown from the response
+      const markdown = await siteHandler.extractMarkdownViaCopyButton(response);
+      const finalResponse = (markdown || response).trim();
+      
+      resolve(finalResponse);
     };
     
     // Function to check if response is stable (no longer changing)
@@ -331,10 +377,10 @@ async function waitForResponse(prompt) {
         
         if (currentText === lastResponseText) {
           stableCount++;
-          console.log(`${siteHandler.siteName} response stable for ${stableCount}/${requiredStableChecks} checks`);
+          console.log(`${siteHandler.siteName} ${responseType} response stable for ${stableCount}/${config.requiredStableChecks} checks`);
           
-          if (stableCount >= requiredStableChecks) {
-            console.log(`${siteHandler.siteName} response is stable, capturing final response`);
+          if (stableCount >= config.requiredStableChecks) {
+            console.log(`${siteHandler.siteName} ${responseType} response is stable, capturing final response`);
             handleResponse(currentResponse, 'stability check');
             return;
           }
@@ -345,17 +391,17 @@ async function waitForResponse(prompt) {
           if (changeRatio < 0.05 && currentText.length > lastResponseText.length) {
             // Small change, likely just finishing touches - count as stable
             stableCount++;
-            console.log(`Small change detected on ${siteHandler.siteName} (${changeRatio.toFixed(3)}), counting as stable: ${stableCount}/${requiredStableChecks}`);
+            console.log(`Small change detected on ${siteHandler.siteName} ${responseType} (${changeRatio.toFixed(3)}), counting as stable: ${stableCount}/${config.requiredStableChecks}`);
             
-            if (stableCount >= requiredStableChecks) {
-              console.log(`${siteHandler.siteName} response is stable after small changes, capturing final response`);
+            if (stableCount >= config.requiredStableChecks) {
+              console.log(`${siteHandler.siteName} ${responseType} response is stable after small changes, capturing final response`);
               handleResponse(currentResponse, 'stability check');
               return;
             }
           } else {
             // Significant change, reset stability counter
             stableCount = 0;
-            console.log(`Significant change detected on ${siteHandler.siteName} (${changeRatio.toFixed(3)}), resetting stability counter. New length: ${currentText.length}`);
+            console.log(`Significant change detected on ${siteHandler.siteName} ${responseType} (${changeRatio.toFixed(3)}), resetting stability counter. New length: ${currentText.length}`);
           }
           
           lastResponseText = currentText;
@@ -373,7 +419,7 @@ async function waitForResponse(prompt) {
         if (currentText !== lastResponseText) {
           stableCount = 0; // Reset stability counter when response changes
           lastResponseText = currentText;
-          console.log(`${siteHandler.siteName} response updated via mutation observer. New length:`, currentText.length);
+          console.log(`${siteHandler.siteName} ${responseType} response updated via mutation observer. New length:`, currentText.length);
         }
       }
     });
@@ -381,7 +427,7 @@ async function waitForResponse(prompt) {
     // Observe the chat container using site-specific handler
     const chatContainer = siteHandler.findChatContainer();
     if (chatContainer) {
-      console.log(`Observing ${siteHandler.siteName} chat container for responses`);
+      console.log(`Observing ${siteHandler.siteName} chat container for ${responseType} responses`);
       responseObserver.observe(chatContainer, {
         childList: true,
         subtree: true,
@@ -396,17 +442,110 @@ async function waitForResponse(prompt) {
           }
           await checkResponseStability();
           if (!isResolved) {
-            stabilityCheck = setTimeout(runStabilityCheck, stabilityInterval);
+            stabilityCheck = setTimeout(runStabilityCheck, config.stabilityInterval);
           }
         };
         runStabilityCheck();
-      }, 3000); // Wait 3 seconds before starting stability checks
+      }, config.startStabilityCheckDelay);
       
     } else {
       cleanup();
       reject(new Error(`Could not find ${siteHandler.siteName} chat container`));
     }
   });
+}
+
+/**
+ * Handles the follow-up question to capture metadata about the previous response.
+ * This function submits a structured question asking for analysis of the response
+ * and returns the metadata response for inclusion in the main response object.
+ */
+async function handleFollowUpQuestion(originalPrompt, originalResponse) {
+  try {
+    console.log('=== Starting Follow-up Question for Metadata ===');
+    console.log('Original prompt:', originalPrompt.text || originalPrompt);
+    console.log('Original response length:', originalResponse.length);
+    
+    // Create the follow-up question that captures metadata about the previous response
+    const followUpPrompt = `Please analyze my previous response in this conversation and return the following structured metadata as JSON:
+
+{
+  "response_quality_assessment": "excellent|good|fair|poor",
+  "response_completeness": "complete|partial|minimal", 
+  "sentiment": "positive|negative|neutral|mixed",
+  "response_tone": "professional|casual|formal|informal",
+  "response_length": "short|medium|long",
+  "contains_specific_examples_or_citations": "Yes|No",
+  "contains_actionable_advice_or_recommendations": "Yes|No", 
+  "contains_disclaimers_or_uncertainty_statements": "Yes|No",
+  "response_structure": "structured|conversational|bullet-points|narrative",
+  "provider":"openai|string",
+  "tokens_used":"string",
+  "model_used": "string",
+  "platform": "ChatGPT|API|playground|other",
+  "model_version_id": "string",
+  "knowledge_cutoff_date": "string",
+  "external_tools_or_web_sources_used": "Yes|No",
+  "answer_based_on_internal_knowledge_only": "Yes|No",
+  "memory_or_custom_instructions_used": "Yes|No",
+  "system_instructions_or_context_influenced": "Yes|No"
+}
+
+Please ensure all values are exactly as specified in the options above. For string fields, provide the actual values where known, or "unknown" if not accessible.`;
+
+    console.log('Submitting follow-up question for metadata...');
+    
+    // Wait a moment for the page to be ready for the next input
+    await new Promise(resolve => setTimeout(resolve, 5000)); // Increased from 3 to 5 seconds
+    
+    // Find the input field
+    const input = await siteHandler.findInputField();
+    
+    if (!input) {
+      console.error('Could not find input field for follow-up question');
+      return;
+    }
+    
+    // Set the follow-up question
+    if (input.getAttribute('contenteditable') === 'true') {
+      input.textContent = followUpPrompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      input.value = followUpPrompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    
+    // Wait a moment for the input to be processed
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Find and click submit button
+    const submitButton = await siteHandler.findSubmitButton();
+    
+    if (!submitButton) {
+      console.error('Could not find submit button for follow-up question');
+      return;
+    }
+    
+    console.log('Submitting follow-up question...');
+    submitButton.click();
+    
+    // Wait for the follow-up response
+    console.log('Starting to wait for follow-up response...');
+    const metadataResponse = await waitForResponse(originalPrompt, originalResponse, { isFollowUp: true });
+    
+    if (metadataResponse) {
+      console.log('Follow-up response received, returning metadata...');
+      console.log('Metadata response length:', metadataResponse.length);
+      return metadataResponse.trim();
+    }
+    
+    return null; // Return null if no metadata response
+    
+  } catch (error) {
+    console.error('Error handling follow-up question:', error);
+  }
 }
 
 async function waitForElement(selector, timeout = 5000) {

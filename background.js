@@ -25,7 +25,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       prompt: request.prompt,
       response: request.response,
       site: request.site || 'Unknown',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      promptId: request.promptId,
+      category: request.category,
+      tags: request.tags,
+      measurements: request.measurements,
+      brandId: request.brandId,
+      approved: request.approved,
+      active: request.active,
+      createdAt: request.createdAt,
+      metadata: request.metadata // Add metadata field
     });
     
     // Save to local storage

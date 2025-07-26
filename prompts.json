@@ -1,4 +1,24 @@
 [
-    "Explain quantum computing in simple terms",
-    "Write a Python script to calculate Fibonacci sequence"
-  ]
+  {
+    "id": "00754a9b-6c18-427d-8678-7942e6cd0889",
+    "text": "Which travel insurance providers offer Flexible cancellation cover (can opt out)?",
+    "category": "USP-Based Prompts",
+    "tags": "[\"Direct Query\"]",
+    "measurements": "[]",
+    "brand_id": "81d7fc14-ff9e-487a-a3af-24683d968b4f",
+    "approved": "1",
+    "active": "1",
+    "created_at": "2025-07-24 22:09:47.440224"
+  },
+  {
+    "id": "01051bea-0283-4572-9a53-6a371747b14c",
+    "text": "Which is better for people moving home: Nationwide or Molo Finance?",
+    "category": "Competitor by use case",
+    "tags": "[\"Competitor\", \"Use case\", \"Distuptor\"]",
+    "measurements": "[\"Competitior\", \"Sentiment\", \"Gaps/opportunity\"]",
+    "brand_id": "6507bef0-f592-4f6a-b1d9-0da6317f218a",
+    "approved": "0",
+    "active": "1",
+    "created_at": "2025-07-24 16:27:37.624356"
+  }
+]
