@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Debug</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        button { padding: 10px 20px; margin: 5px; }
+        pre { background-color: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Supabase API Debug</h1>
+    
+    <div class="info">
+        <h3>Configuration</h3>
+        <p><strong>API Base URL:</strong> <span id="apiUrl"></span></p>
+        <p><strong>Anon Key:</strong> <span id="anonKey"></span></p>
+    </div>
+    
+    <button onclick="testBasicConnection()">Test Basic Connection</button>
+    <button onclick="testBatchesEndpoint()">Test /batches Endpoint</button>
+    <button onclick="testPromptsEndpoint()">Test /prompts Endpoint</button>
+    <button onclick="testAlternativeEndpoints()">Test Alternative Endpoints</button>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
+        const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
+        
+        // Display configuration
+        document.getElementById('apiUrl').textContent = API_BASE_URL;
+        document.getElementById('anonKey').textContent = anonKey.substring(0, 20) + '...';
+        
+        function addResult(title, content, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = `
+                <h3>${title}</h3>
+                <pre>${content}</pre>
+            `;
+            resultsDiv.appendChild(div);
+        }
+        
+        async function testBasicConnection() {
+            addResult('Basic Connection Test', 'Testing basic connectivity...', 'info');
+            
+            try {
+                // Test 1: Simple GET request to the base URL
+                const response1 = await fetch(API_BASE_URL, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                addResult('GET Base URL Response', 
+                    `Status: ${response1.status}\nHeaders: ${JSON.stringify(Object.fromEntries(response1.headers.entries()), null, 2)}`, 
+                    response1.ok ? 'success' : 'error'
+                );
+                
+                // Test 2: OPTIONS request to check CORS
+                const response2 = await fetch(API_BASE_URL, {
+                    method: 'OPTIONS'
+                });
+                
+                addResult('OPTIONS Request Response', 
+                    `Status: ${response2.status}\nHeaders: ${JSON.stringify(Object.fromEntries(response2.headers.entries()), null, 2)}`, 
+                    response2.ok ? 'success' : 'error'
+                );
+                
+            } catch (error) {
+                addResult('Connection Error', error.message, 'error');
+            }
+        }
+        
+        async function testBatchesEndpoint() {
+            addResult('Batches Endpoint Test', 'Testing /batches endpoint...', 'info');
+            
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${anonKey}`,
+                'apikey': anonKey,
+                'x-client-info': 'supabase-js/2.0.0'
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/batches`, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({}) // Add empty body as the API expects JSON
+                });
+                
+                const responseText = await response.text();
+                let responseData;
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (e) {
+                    responseData = responseText;
+                }
+                
+                addResult('Batches Response', 
+                    `Status: ${response.status}\nHeaders: ${JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2)}\nBody: ${JSON.stringify(responseData, null, 2)}`, 
+                    response.ok ? 'success' : 'error'
+                );
+                
+            } catch (error) {
+                addResult('Batches Error', error.message, 'error');
+            }
+        }
+        
+        async function testPromptsEndpoint() {
+            addResult('Prompts Endpoint Test', 'Testing /prompts endpoint...', 'info');
+            
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${anonKey}`,
+                'apikey': anonKey,
+                'x-client-info': 'supabase-js/2.0.0'
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/prompts`, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        limit: 5
+                    })
+                });
+                
+                const responseText = await response.text();
+                let responseData;
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (e) {
+                    responseData = responseText;
+                }
+                
+                addResult('Prompts Response', 
+                    `Status: ${response.status}\nHeaders: ${JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2)}\nBody: ${JSON.stringify(responseData, null, 2)}`, 
+                    response.ok ? 'success' : 'error'
+                );
+                
+                // Test the new structure
+                if (responseData.success && responseData.data && responseData.data.prompts) {
+                    addResult('New Structure Test', 
+                        `Successfully parsed new structure with ${responseData.data.prompts.length} prompts`, 
+                        'success'
+                    );
+                } else {
+                    addResult('New Structure Test', 
+                        'Failed to parse new structure - prompts not found in data.prompts', 
+                        'error'
+                    );
+                }
+                
+            } catch (error) {
+                addResult('Prompts Error', error.message, 'error');
+            }
+        }
+        
+        async function testAlternativeEndpoints() {
+            addResult('Alternative Endpoints Test', 'Testing different endpoint variations...', 'info');
+            
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${anonKey}`,
+                'apikey': anonKey,
+                'x-client-info': 'supabase-js/2.0.0'
+            };
+            
+            // Test different endpoint variations
+            const endpoints = [
+                '/batches',
+                '/api/batches',
+                '/functions/v1/api/batches',
+                '/rest/v1/batches'
+            ];
+            
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(`https://hmwgplzdzffivawkflci.supabase.co${endpoint}`, {
+                        method: 'POST',
+                        headers: headers,
+                        body: endpoint.includes('/batches') ? JSON.stringify({}) : undefined
+                    });
+                    
+                    const responseText = await response.text();
+                    
+                    addResult(`Endpoint: ${endpoint}`, 
+                        `Status: ${response.status}\nResponse: ${responseText.substring(0, 200)}...`, 
+                        response.ok ? 'success' : 'error'
+                    );
+                    
+                } catch (error) {
+                    addResult(`Endpoint: ${endpoint}`, `Error: ${error.message}`, 'error');
+                }
+            }
+        }
+    </script>
+</body>
+</html> 

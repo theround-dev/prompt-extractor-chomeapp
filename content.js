@@ -267,6 +267,8 @@ async function submitPrompt(prompt) {
       tags: prompt.tags,
       measurements: prompt.measurements,
       brandId: prompt.brand_id,
+      brandName: prompt.brand?.name,
+      brandDescription: prompt.brand?.description,
       approved: prompt.approved,
       active: prompt.active,
       createdAt: prompt.created_at,

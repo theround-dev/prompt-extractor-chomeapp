@@ -6,10 +6,14 @@ A Chrome extension that automates prompt submission and response collection for 
 
 - **Multi-site Support**: Works with both [DeepSeek Chat](https://chat.deepseek.com) and [OpenAI Chat](https://chatgpt.com)
 - **Automatic Site Detection**: Automatically detects which site you're on and uses the appropriate handler
-- **Batch Processing**: Processes multiple prompts from a JSON file
+- **Flexible Prompt Sources**: 
+  - **Local Prompts**: Use prompts from local `prompts.json` file
+  - **Automated Batches**: Fetch prompts from Supabase API batches
+- **Batch Processing**: Processes multiple prompts from your chosen source
 - **Response Collection**: Saves all responses with timestamps and site information
 - **Real-time Progress**: Shows progress in the popup interface
 - **Export Functionality**: Downloads responses as JSON files
+- **Persistent Settings**: Remembers your prompt source and batch selection
 
 ## Installation
 
@@ -23,14 +27,20 @@ A Chrome extension that automates prompt submission and response collection for 
 
 ### Setup
 
-1. **Configure Prompts**: Edit `prompts.json` to include your prompts:
-   ```json
-   [
-     "What is the capital of France?",
-     "Explain quantum computing in simple terms",
-     "Write a short poem about technology"
-   ]
-   ```
+1. **Choose Prompt Source**:
+   - **Local Prompts**: Edit `prompts.json` to include your prompts:
+     ```json
+     [
+       {
+         "id": "uuid",
+         "text": "What is the capital of France?",
+         "category": "Geography",
+         "tags": ["location", "capital"],
+         "brand_id": "brand-uuid"
+       }
+     ]
+     ```
+   - **Automated Batches**: Select "Automated Batch" in the popup and choose from available batches
 
 2. **Choose Your Site**: 
    - Navigate to either [chat.deepseek.com](https://chat.deepseek.com) or [chatgpt.com](https://chatgpt.com)
@@ -38,9 +48,12 @@ A Chrome extension that automates prompt submission and response collection for 
 
 ### Running Automation
 
-1. **Start Automation**: Click the extension icon and click "Start Automation"
-2. **Monitor Progress**: The popup will show current progress and site information
-3. **Collect Results**: When complete, responses will be automatically downloaded as a JSON file
+1. **Select Prompt Source**: 
+   - Choose "Local Prompts" to use your `prompts.json` file
+   - Choose "Automated Batch" and select a batch from the dropdown
+2. **Start Automation**: Click the extension icon and click "Start Automation"
+3. **Monitor Progress**: The popup will show current progress and site information
+4. **Collect Results**: When complete, responses will be automatically downloaded as a JSON file
 
 ### Response Format
 
@@ -50,12 +63,21 @@ Responses are saved with the following structure:
   "timestamp": "2024-01-15T10:30:00.000Z",
   "totalPrompts": 3,
   "site": "deepseek",
+  "promptSource": "local",
+  "batchId": "batch-uuid",
   "responses": [
     {
       "prompt": "What is the capital of France?",
       "response": "The capital of France is Paris...",
       "site": "deepseek",
-      "timestamp": "2024-01-15T10:30:05.000Z"
+      "timestamp": "2024-01-30T10:30:05.000Z",
+      "promptId": "prompt-uuid",
+      "category": "Geography",
+      "tags": ["location", "capital"],
+      "brandId": "brand-uuid",
+      "brandName": "Brand Name",
+      "brandDescription": "Brand Description",
+      "batchId": "batch-uuid"
     }
   ]
 }
@@ -90,6 +112,13 @@ chromeApp/
 - Optimized for OpenAI's response patterns
 
 ## Technical Details
+
+### API Integration
+The extension integrates with a Supabase Edge Function API for batch management:
+- **Endpoint**: `https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api`
+- **Batches Endpoint**: `POST /batches` - Retrieves all available batches
+- **Prompts Endpoint**: `POST /prompts` - Retrieves prompts filtered by brand_id
+- **Authentication**: Uses Supabase anon key for API access
 
 ### Site Detection
 The extension automatically detects which site you're on by checking the hostname:

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Supabase API Test</h1>
+    
+    <button onclick="testBatches()">Test Batches API</button>
+    <button onclick="testPrompts()">Test Prompts API</button>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
+        const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
+        
+        async function testBatches() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="result">Testing batches API...</div>';
+            
+            try {
+                console.log('Testing batches API with key:', anonKey.substring(0, 20) + '...');
+                const response = await fetch(`${API_BASE_URL}/batches`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${anonKey}`,
+                        'apikey': anonKey,
+                        'x-client-info': 'supabase-js/2.0.0'
+                    },
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Error response:', errorText);
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                }
+                
+                const data = await response.json();
+                console.log(data);
+                
+                if (data.success && data.data) {
+                    resultsDiv.innerHTML = `
+                        <div class="result success">
+                            <h3>Batches API Test - SUCCESS</h3>
+                            <p>Found ${data.data.length} batches:</p>
+                            <ul>
+                                ${data.data.map(batch => `
+                                    <li>${batch.name} (${batch.status}) - ${new Date(batch.started_at).toLocaleDateString()}</li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(data.error || 'Failed to load batches');
+                }
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div class="result error">
+                        <h3>Batches API Test - ERROR</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+        
+        async function testPrompts() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="result">Testing prompts API...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/prompts`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${anonKey}`,
+                        'apikey': anonKey,
+                        'x-client-info': 'supabase-js/2.0.0'
+                    },
+                    body: JSON.stringify({
+                        brand_id: "6507bef0-f592-4f6a-b1d9-0da6317f218a",
+                        limit: 5 // Just get a few prompts for testing
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Error response:', errorText);
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                }
+                
+                const data = await response.json();
+                console.log(data);
+                
+                if (data.success && data.data && data.data.prompts) {
+                    resultsDiv.innerHTML = `
+                        <div class="result success">
+                            <h3>Prompts API Test - SUCCESS</h3>
+                            <p>Found ${data.data.prompts.length} prompts:</p>
+                            <ul>
+                                ${data.data.prompts.map(prompt => `
+                                    <li>${prompt.text.substring(0, 100)}... (${prompt.category})</li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(data.error || 'Failed to load prompts');
+                }
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div class="result error">
+                        <h3>Prompts API Test - ERROR</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html> 

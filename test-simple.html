@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; }
+        pre { background-color: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Simple API Test</h1>
+    
+    <button onclick="testBatches()">Test Batches API</button>
+    <button onclick="testPrompts()">Test Prompts API</button>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
+        const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
+        
+        function addResult(title, content, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = `
+                <h3>${title}</h3>
+                <pre>${content}</pre>
+            `;
+            resultsDiv.appendChild(div);
+        }
+        
+        async function testBatches() {
+            addResult('Testing Batches API', 'Making request...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/batches`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${anonKey}`,
+                        'apikey': anonKey,
+                    }
+                });
+                
+                const responseText = await response.text();
+                let responseData;
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (e) {
+                    responseData = responseText;
+                }
+                
+                addResult('Batches Response', 
+                    `Status: ${response.status}\nResponse: ${JSON.stringify(responseData, null, 2)}`, 
+                    response.ok ? 'success' : 'error'
+                );
+                
+            } catch (error) {
+                addResult('Batches Error', error.message, 'error');
+            }
+        }
+        
+        async function testPrompts() {
+            addResult('Testing Prompts API', 'Making request...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/prompts`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${anonKey}`,
+                        'apikey': anonKey,
+                        'x-client-info': 'supabase-js/2.0.0'
+                    },
+                    body: JSON.stringify({
+                        limit: 5
+                    })
+                });
+                
+                const responseText = await response.text();
+                let responseData;
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (e) {
+                    responseData = responseText;
+                }
+                
+                addResult('Prompts Response', 
+                    `Status: ${response.status}\nResponse: ${JSON.stringify(responseData, null, 2)}`, 
+                    response.ok ? 'success' : 'error'
+                );
+                
+                // Test the new structure
+                if (responseData.success && responseData.data && responseData.data.prompts) {
+                    addResult('New Structure Test', 
+                        `Successfully parsed new structure with ${responseData.data.prompts.length} prompts`, 
+                        'success'
+                    );
+                } else {
+                    addResult('New Structure Test', 
+                        'Failed to parse new structure - prompts not found in data.prompts', 
+                        'error'
+                    );
+                }
+                
+            } catch (error) {
+                addResult('Prompts Error', error.message, 'error');
+            }
+        }
+    </script>
+</body>
+</html> 

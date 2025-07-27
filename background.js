@@ -4,17 +4,114 @@ let prompts = [];
 let responses = [];
 let currentTabId = null;
 let currentSite = null;
+let currentBatchId = null;
+let promptSource = 'local'; // 'local' or 'batch'
+
+// API configuration
+const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
+const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
 
 // Load prompts when extension starts
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    const result = await fetch(chrome.runtime.getURL('prompts.json'));
-    prompts = await result.json();
-    console.log('Prompts loaded:', prompts.length);
+    // Load saved settings
+    chrome.storage.local.get(['promptSource', 'selectedBatchId'], async function(result) {
+      promptSource = result.promptSource || 'local';
+      currentBatchId = result.selectedBatchId;
+      
+      if (promptSource === 'local') {
+        await loadLocalPrompts();
+      } else if (promptSource === 'batch' && currentBatchId) {
+        await loadBatchPrompts(currentBatchId);
+      }
+    });
   } catch (error) {
     console.error('Failed to load prompts:', error);
   }
 });
+
+async function loadLocalPrompts() {
+  try {
+    const result = await fetch(chrome.runtime.getURL('prompts.json'));
+    prompts = await result.json();
+    console.log('Local prompts loaded:', prompts.length);
+  } catch (error) {
+    console.error('Failed to load local prompts:', error);
+    prompts = [];
+  }
+}
+
+async function loadBatchPrompts(batchId) {
+  try {
+    console.log('Loading prompts for batch:', batchId);
+    
+    // First, we need to get the batch details to find the brand_id
+    const batchResponse = await fetch(`${API_BASE_URL}/batches`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${anonKey}`,
+        'apikey': anonKey,
+        'x-client-info': 'supabase-js/2.0.0'
+      }
+    });
+    
+    if (!batchResponse.ok) {
+      throw new Error(`HTTP error! status: ${batchResponse.status}`);
+    }
+    
+    const batchData = await batchResponse.json();
+    
+    if (!batchData.success || !batchData.data) {
+      throw new Error('Failed to load batch data');
+    }
+    
+    // Find the specific batch
+    const batch = batchData.data.find(b => b.id === batchId);
+    if (!batch) {
+      throw new Error('Batch not found');
+    }
+    
+    // Extract brand_id from batch config or metadata
+    const brandId = batch.config?.brand_id || batch.batch_metadata?.brand_id;
+    
+    if (!brandId) {
+      throw new Error('No brand_id found in batch configuration');
+    }
+    
+    // Now get prompts for this brand
+    const promptsResponse = await fetch(`${API_BASE_URL}/prompts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${anonKey}`,
+        'apikey': anonKey,
+        'x-client-info': 'supabase-js/2.0.0'
+      },
+      body: JSON.stringify({
+        brand_id: brandId,
+        limit: 1000 // Get all prompts for the brand
+      })
+    });
+    
+    if (!promptsResponse.ok) {
+      throw new Error(`HTTP error! status: ${promptsResponse.status}`);
+    }
+    
+    const promptsData = await promptsResponse.json();
+    
+    if (promptsData.success && promptsData.data && promptsData.data.prompts) {
+      prompts = promptsData.data.prompts;
+      console.log('Batch prompts loaded:', prompts.length);
+    } else {
+      throw new Error(promptsData.error || 'Failed to load batch prompts');
+    }
+    
+  } catch (error) {
+    console.error('Failed to load batch prompts:', error);
+    prompts = [];
+  }
+}
 
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -31,10 +128,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       tags: request.tags,
       measurements: request.measurements,
       brandId: request.brandId,
+      brandName: request.brandName,
+      brandDescription: request.brandDescription,
       approved: request.approved,
       active: request.active,
       createdAt: request.createdAt,
-      metadata: request.metadata // Add metadata field
+      metadata: request.metadata,
+      batchId: currentBatchId // Add batch ID to response
     });
     
     // Save to local storage
@@ -90,7 +190,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "startAutomation") {
     if (!isRunning) {
-      startAutomation().then(() => {
+      startAutomation(request.promptSource, request.batchId).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {
         console.error('Failed to start automation:', error);
@@ -109,7 +209,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       currentPromptIndex: currentPromptIndex,
       totalPrompts: prompts.length,
       responsesCount: responses.length,
-      currentSite: currentSite
+      currentSite: currentSite,
+      promptSource: promptSource,
+      batchId: currentBatchId
     });
   } else if (request.type === "downloadResponses") {
     try {
@@ -122,11 +224,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-async function startAutomation() {
+async function startAutomation(source = 'local', batchId = null) {
   try {
     isRunning = true;
     currentPromptIndex = 0;
     responses = [];
+    promptSource = source;
+    currentBatchId = batchId;
+    
+    // Load prompts based on source
+    if (source === 'local') {
+      await loadLocalPrompts();
+    } else if (source === 'batch' && batchId) {
+      await loadBatchPrompts(batchId);
+    } else {
+      throw new Error('Invalid prompt source or missing batch ID');
+    }
+    
+    if (prompts.length === 0) {
+      throw new Error('No prompts available');
+    }
     
     // Detect which site to use based on current tab or preference
     const currentTab = await getCurrentTab();
@@ -181,6 +298,7 @@ async function startAutomation() {
   } catch (error) {
     console.error('Error starting automation:', error);
     isRunning = false;
+    throw error;
   }
 }
 
@@ -201,13 +319,16 @@ function saveResponsesToFile() {
       timestamp: new Date().toISOString(),
       totalPrompts: prompts.length,
       site: currentSite,
+      promptSource: promptSource,
+      batchId: currentBatchId,
       responses: responses
     };
     
     const jsonString = JSON.stringify(data, null, 2);
     const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonString);
     
-    const filename = `${currentSite}_responses_${new Date().toISOString().split('T')[0]}.json`;
+    const sourceSuffix = promptSource === 'batch' ? `_batch_${currentBatchId}` : '_local';
+    const filename = `${currentSite}_responses${sourceSuffix}_${new Date().toISOString().split('T')[0]}.json`;
     
     chrome.downloads.download({
       url: dataUrl,

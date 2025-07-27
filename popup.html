@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <style>
     body {
-      width: 300px;
+      width: 350px;
       padding: 20px;
       font-family: Arial, sans-serif;
     }
@@ -58,6 +58,13 @@
     .button.download:hover {
       background-color: #1976d2;
     }
+    .button.refresh {
+      background-color: #ff9800;
+      color: white;
+    }
+    .button.refresh:hover {
+      background-color: #e68900;
+    }
     .info {
       font-size: 12px;
       color: #666;
@@ -77,11 +84,83 @@
       background-color: #f9f9f9;
       border-radius: 4px;
     }
+    .prompt-source {
+      margin-bottom: 15px;
+      padding: 10px;
+      background-color: #f9f9f9;
+      border-radius: 5px;
+    }
+    .prompt-source label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+      color: #333;
+    }
+    .radio-group {
+      margin-bottom: 10px;
+    }
+    .radio-group input[type="radio"] {
+      margin-right: 8px;
+    }
+    .radio-group label {
+      display: inline;
+      font-weight: normal;
+      margin-right: 15px;
+    }
+    .batch-selector {
+      margin-top: 10px;
+      display: none;
+    }
+    .batch-selector select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .batch-selector button {
+      margin-top: 8px;
+      padding: 6px 12px;
+      background-color: #4caf50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .batch-selector button:hover {
+      background-color: #45a049;
+    }
+    .loading {
+      color: #666;
+      font-style: italic;
+      font-size: 11px;
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <h3>AI Chat Automator</h3>
+  </div>
+  
+  <div class="prompt-source">
+    <label>Prompt Source:</label>
+    <div class="radio-group">
+      <input type="radio" id="localPrompts" name="promptSource" value="local" checked>
+      <label for="localPrompts">Local Prompts (prompts.json)</label>
+    </div>
+    <div class="radio-group">
+      <input type="radio" id="automatedBatch" name="promptSource" value="batch">
+      <label for="automatedBatch">Automated Batch</label>
+    </div>
+    
+    <div id="batchSelector" class="batch-selector">
+      <select id="batchSelect">
+        <option value="">Select a batch...</option>
+      </select>
+      <button id="refreshBatches">Refresh Batches</button>
+      <div id="batchLoading" class="loading" style="display: none;">Loading batches...</div>
+    </div>
   </div>
   
   <div id="status" class="status stopped">
@@ -97,7 +176,7 @@
   <button id="downloadBtn" class="button download">Download Last Output</button>
   
   <div class="info">
-    Click "Start Automation" to begin processing all prompts from prompts.json
+    Click "Start Automation" to begin processing prompts
   </div>
   
   <div class="site-info">

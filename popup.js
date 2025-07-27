@@ -6,17 +6,85 @@ document.addEventListener('DOMContentLoaded', function() {
   const progress = document.getElementById('progress');
   const progressText = document.getElementById('progressText');
   
+  // New elements for batch functionality
+  const localPromptsRadio = document.getElementById('localPrompts');
+  const automatedBatchRadio = document.getElementById('automatedBatch');
+  const batchSelector = document.getElementById('batchSelector');
+  const batchSelect = document.getElementById('batchSelect');
+  const refreshBatchesBtn = document.getElementById('refreshBatches');
+  const batchLoading = document.getElementById('batchLoading');
+  
+  // API configuration
+  const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
+  const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
+  
   // Check current status
   updateStatus();
   
+  // Load saved settings
+  loadSavedSettings();
+  
+  // Radio button change handlers
+  localPromptsRadio.addEventListener('change', function() {
+    if (this.checked) {
+      batchSelector.style.display = 'none';
+      savePromptSource('local');
+    }
+  });
+  
+  automatedBatchRadio.addEventListener('change', function() {
+    if (this.checked) {
+      batchSelector.style.display = 'block';
+      savePromptSource('batch');
+      loadBatches();
+    }
+  });
+  
+  // Batch selection change handler
+  batchSelect.addEventListener('change', function() {
+    const selectedBatchId = this.value;
+    if (selectedBatchId) {
+      saveSelectedBatch(selectedBatchId);
+      status.textContent = `Batch selected: ${this.options[this.selectedIndex].text}`;
+      status.className = 'status running';
+    } else {
+      chrome.storage.local.remove(['selectedBatchId', 'selectedBatchName']);
+      status.textContent = 'Ready to start';
+      status.className = 'status stopped';
+    }
+  });
+  
+  // Refresh batches button
+  refreshBatchesBtn.addEventListener('click', function() {
+    loadBatches();
+  });
+  
   // Start button click
   startBtn.addEventListener('click', function() {
-    chrome.runtime.sendMessage({ type: 'startAutomation' }, function(response) {
+    const promptSource = document.querySelector('input[name="promptSource"]:checked').value;
+    
+    if (promptSource === 'batch' && !batchSelect.value) {
+      status.textContent = 'Please select a batch first';
+      status.className = 'status stopped';
+      return;
+    }
+    
+    // Show loading state
+    status.textContent = 'Starting automation...';
+    status.className = 'status running';
+    startBtn.disabled = true;
+    
+    chrome.runtime.sendMessage({ 
+      type: 'startAutomation',
+      promptSource: promptSource,
+      batchId: promptSource === 'batch' ? batchSelect.value : null
+    }, function(response) {
       if (response && response.success) {
         updateStatus();
       } else {
-        status.textContent = 'Failed to start automation';
+        status.textContent = 'Failed to start automation: ' + (response?.error || 'Unknown error');
         status.className = 'status stopped';
+        startBtn.disabled = false;
       }
     });
   });
@@ -47,6 +115,118 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
   
+  async function loadBatches() {
+    try {
+      batchLoading.style.display = 'block';
+      batchSelect.disabled = true;
+      status.textContent = 'Loading batches...';
+      status.className = 'status running';
+      
+      console.log('Making API request to:', `${API_BASE_URL}/batches`);
+      console.log('Using anon key:', anonKey.substring(0, 20) + '...');
+      
+      const response = await fetch(`${API_BASE_URL}/batches`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonKey}`,
+          'apikey': anonKey,
+          'x-client-info': 'supabase-js/2.0.0'
+        },
+      });
+      
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response body:', errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Response data:', data);
+      
+      if (data.success && data.data) {
+        // Clear existing options except the first one
+        batchSelect.innerHTML = '<option value="">Select a batch...</option>';
+        
+        // Add batch options
+        data.data.forEach(batch => {
+          const option = document.createElement('option');
+          option.value = batch.id;
+          const date = new Date(batch.started_at).toLocaleDateString();
+          option.textContent = `${batch.name} (${batch.status}) - ${date}`;
+          batchSelect.appendChild(option);
+        });
+        
+        // Restore previously selected batch if it exists
+        chrome.storage.local.get(['selectedBatchId'], function(result) {
+          if (result.selectedBatchId) {
+            batchSelect.value = result.selectedBatchId;
+            // Trigger change event to update status
+            batchSelect.dispatchEvent(new Event('change'));
+          } else {
+            status.textContent = 'Batches loaded. Please select one.';
+            status.className = 'status stopped';
+          }
+        });
+        
+        if (data.data.length === 0) {
+          status.textContent = 'No batches available';
+          status.className = 'status stopped';
+        }
+        
+      } else {
+        throw new Error(data.error || 'Failed to load batches');
+      }
+      
+    } catch (error) {
+      console.error('Error loading batches:', error);
+      status.textContent = 'Failed to load batches: ' + error.message;
+      status.className = 'status stopped';
+      
+      // Add error option to dropdown
+      batchSelect.innerHTML = '<option value="">Error loading batches</option>';
+    } finally {
+      batchLoading.style.display = 'none';
+      batchSelect.disabled = false;
+    }
+  }
+  
+  function loadSavedSettings() {
+    chrome.storage.local.get(['promptSource', 'selectedBatchId'], function(result) {
+      if (result.promptSource === 'batch') {
+        automatedBatchRadio.checked = true;
+        localPromptsRadio.checked = false;
+        batchSelector.style.display = 'block';
+        // Only load batches if we have a saved batch ID
+        if (result.selectedBatchId) {
+          loadBatches();
+        } else {
+          status.textContent = 'Please select a batch';
+          status.className = 'status stopped';
+        }
+      } else {
+        localPromptsRadio.checked = true;
+        automatedBatchRadio.checked = false;
+        batchSelector.style.display = 'none';
+      }
+    });
+  }
+  
+  function savePromptSource(source) {
+    chrome.storage.local.set({ promptSource: source });
+  }
+  
+  function saveSelectedBatch(batchId) {
+    const batchName = batchSelect.options[batchSelect.selectedIndex].text;
+    chrome.storage.local.set({ 
+      selectedBatchId: batchId,
+      selectedBatchName: batchName
+    });
+  }
+  
   function updateStatus() {
     chrome.runtime.sendMessage({ type: 'getStatus' }, function(response) {
       if (response && response.isRunning) {
@@ -65,6 +245,7 @@ document.addEventListener('DOMContentLoaded', function() {
         status.className = 'status stopped';
         startBtn.style.display = 'block';
         stopBtn.style.display = 'none';
+        startBtn.disabled = false;
         progress.style.display = 'none';
       }
     });

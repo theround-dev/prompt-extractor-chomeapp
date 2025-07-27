@@ -14,7 +14,8 @@
   ],
   "host_permissions": [
     "https://chat.deepseek.com/*",
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "https://hmwgplzdzffivawkflci.supabase.co/*"
   ],
   "background": {
     "service_worker": "background.js"
