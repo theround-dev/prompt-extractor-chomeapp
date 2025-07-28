@@ -91,8 +91,26 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Stop button click
   stopBtn.addEventListener('click', function() {
+    // Show stopping state
+    status.textContent = 'Stopping automation...';
+    status.className = 'status running';
+    stopBtn.disabled = true;
+    
     chrome.runtime.sendMessage({ type: 'stopAutomation' }, function(response) {
-      updateStatus();
+      if (response && response.success) {
+        status.textContent = 'Automation stopped';
+        status.className = 'status stopped';
+        setTimeout(() => {
+          updateStatus();
+        }, 1000);
+      } else {
+        status.textContent = 'Failed to stop automation: ' + (response?.error || 'Unknown error');
+        status.className = 'status stopped';
+        stopBtn.disabled = false;
+        setTimeout(() => {
+          updateStatus();
+        }, 3000);
+      }
     });
   });
   
@@ -235,6 +253,7 @@ document.addEventListener('DOMContentLoaded', function() {
         status.className = 'status running';
         startBtn.style.display = 'none';
         stopBtn.style.display = 'block';
+        stopBtn.disabled = false; // Re-enable stop button
         
         if (response.currentPromptIndex !== undefined && response.totalPrompts) {
           progress.style.display = 'block';
@@ -246,6 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
         startBtn.style.display = 'block';
         stopBtn.style.display = 'none';
         startBtn.disabled = false;
+        stopBtn.disabled = false; // Reset stop button state
         progress.style.display = 'none';
       }
     });

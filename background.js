@@ -5,7 +5,9 @@ let responses = [];
 let currentTabId = null;
 let currentSite = null;
 let currentBatchId = null;
+let currentBrandId = null; // Add global variable to store brand_id
 let promptSource = 'local'; // 'local' or 'batch'
+let nextPromptTimeoutId = null; // Track the timeout for the next prompt
 
 // API configuration
 const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
@@ -35,6 +37,13 @@ async function loadLocalPrompts() {
     const result = await fetch(chrome.runtime.getURL('prompts.json'));
     prompts = await result.json();
     console.log('Local prompts loaded:', prompts.length);
+    console.log('First prompt structure:', prompts[0]);
+    
+    // Extract brand_id from the first prompt for local prompts
+    if (prompts.length > 0 && prompts[0].brand_id) {
+      currentBrandId = prompts[0].brand_id;
+      console.log('Local prompts brand_id set to:', currentBrandId);
+    }
   } catch (error) {
     console.error('Failed to load local prompts:', error);
     prompts = [];
@@ -73,11 +82,17 @@ async function loadBatchPrompts(batchId) {
     }
     
     // Extract brand_id from batch config or metadata
-    const brandId = batch.config?.brand_id || batch.batch_metadata?.brand_id;
+    const brandId = batch.config?.brand_id || batch.config?.brand || batch.batch_metadata?.brand_id;
+    
+    console.log('Batch config:', batch.config);
+    console.log('Extracted brand_id:', brandId);
     
     if (!brandId) {
       throw new Error('No brand_id found in batch configuration');
     }
+    
+    currentBrandId = brandId; // Store brand_id globally
+    console.log('Global brand_id set to:', currentBrandId);
     
     // Now get prompts for this brand
     const promptsResponse = await fetch(`${API_BASE_URL}/prompts`, {
@@ -89,6 +104,7 @@ async function loadBatchPrompts(batchId) {
         'x-client-info': 'supabase-js/2.0.0'
       },
       body: JSON.stringify({
+        batch_id: batchId,
         brand_id: brandId,
         limit: 1000 // Get all prompts for the brand
       })
@@ -103,6 +119,8 @@ async function loadBatchPrompts(batchId) {
     if (promptsData.success && promptsData.data && promptsData.data.prompts) {
       prompts = promptsData.data.prompts;
       console.log('Batch prompts loaded:', prompts.length);
+      console.log('First batch prompt structure:', prompts[0]);
+      console.log('First batch prompt brand_id:', prompts[0]?.brand_id);
     } else {
       throw new Error(promptsData.error || 'Failed to load batch prompts');
     }
@@ -118,52 +136,82 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Received message:', request.type);
   
   if (request.type === "saveResponse") {
-    responses.push({
-      prompt: request.prompt,
+    // Create consistent data structure matching API payload
+    const responseData = {
+      prompt_id: request.promptId,
+      brand_id: currentBrandId, // Use the global brand_id
       response: request.response,
-      site: request.site || 'Unknown',
-      timestamp: new Date().toISOString(),
-      promptId: request.promptId,
-      category: request.category,
-      tags: request.tags,
-      measurements: request.measurements,
-      brandId: request.brandId,
-      brandName: request.brandName,
-      brandDescription: request.brandDescription,
-      approved: request.approved,
-      active: request.active,
-      createdAt: request.createdAt,
-      metadata: request.metadata,
-      batchId: currentBatchId // Add batch ID to response
-    });
+      batch_id: currentBatchId,
+      llm_model: currentSite === 'openai' ? 'gpt-4' : 'deepseek-chat',
+      config: {
+        site: request.site || 'Unknown',
+        category: request.category,
+        tags: request.tags,
+        measurements: request.measurements
+      },
+      output_metadata: {
+        brand_name: request.brandName,
+        brand_description: request.brandDescription,
+        approved: request.approved,
+        active: request.active,
+        created_at: request.createdAt,
+        original_metadata: request.metadata,
+        site_used: request.site || 'Unknown',
+        timestamp: new Date().toISOString()
+      },
+      version_info: {
+        app_type: "chrome_extension",
+        app_version: "1.0.0",
+        extension_version: chrome.runtime.getManifest().version,
+        prompt_source: promptSource
+      },
+      // Keep original prompt for reference (not sent to API)
+      original_prompt: request.prompt
+    };
+    
+    // Debug logging to see what's being received
+    console.log('Received saveResponse request:', request);
+    console.log('Current brand_id:', currentBrandId);
+    console.log('Constructed responseData:', responseData);
+    
+    responses.push(responseData);
     
     // Save to local storage
     chrome.storage.local.set({ responses }, () => {
       console.log('Response saved, total:', responses.length);
     });
     
-    // Continue with next prompt
+    // Save to API endpoint
+    savePromptOutputToAPI(responseData);
+    
+    // Continue with next prompt only if still running
     currentPromptIndex++;
-    if (currentPromptIndex < prompts.length) {
-      setTimeout(() => {
-        chrome.tabs.sendMessage(sender.tab.id, {
-          type: "nextPrompt",
-          prompt: prompts[currentPromptIndex]
-        });
-      }, 3000); // Wait 3 seconds between prompts
+    if (currentPromptIndex < prompts.length && isRunning) {
+              nextPromptTimeoutId = setTimeout(() => {
+          if (isRunning) { // Double-check before sending next prompt
+            console.log('Sending next prompt to content script:', prompts[currentPromptIndex]);
+            console.log('Next prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
+            chrome.tabs.sendMessage(sender.tab.id, {
+              type: "nextPrompt",
+              prompt: prompts[currentPromptIndex]
+            });
+          }
+        }, 3000); // Wait 3 seconds between prompts
     } else {
-      isRunning = false;
-      console.log('All prompts completed');
-      // Save all responses to a file
-      try {
-        saveResponsesToFile();
-      } catch (error) {
-        console.error('Failed to save responses to file:', error);
-        // Ensure responses are at least saved to storage
-        chrome.storage.local.set({ 
-          responses: responses,
-          completed_timestamp: new Date().toISOString()
-        });
+      if (currentPromptIndex >= prompts.length) {
+        isRunning = false;
+        console.log('All prompts completed');
+        // Save all responses to a file
+        try {
+          saveResponsesToFile();
+        } catch (error) {
+          console.error('Failed to save responses to file:', error);
+          // Ensure responses are at least saved to storage
+          chrome.storage.local.set({ 
+            responses: responses,
+            completed_timestamp: new Date().toISOString()
+          });
+        }
       }
     }
   } else if (request.type === "error") {
@@ -201,7 +249,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: 'Already running' });
     }
   } else if (request.type === "stopAutomation") {
-    isRunning = false;
+    stopAutomation();
     sendResponse({ success: true });
   } else if (request.type === "getStatus") {
     sendResponse({
@@ -231,6 +279,7 @@ async function startAutomation(source = 'local', batchId = null) {
     responses = [];
     promptSource = source;
     currentBatchId = batchId;
+    currentBrandId = null; // Reset brand_id
     
     // Load prompts based on source
     if (source === 'local') {
@@ -243,6 +292,17 @@ async function startAutomation(source = 'local', batchId = null) {
     
     if (prompts.length === 0) {
       throw new Error('No prompts available');
+    }
+    
+    // Ensure we have a brand_id
+    if (!currentBrandId) {
+      console.warn('No brand_id found, attempting to extract from first prompt...');
+      if (prompts[0]?.brand_id) {
+        currentBrandId = prompts[0].brand_id;
+        console.log('Extracted brand_id from first prompt:', currentBrandId);
+      } else {
+        throw new Error('No brand_id available from batch or prompts');
+      }
     }
     
     // Detect which site to use based on current tab or preference
@@ -290,6 +350,8 @@ async function startAutomation(source = 'local', batchId = null) {
     }
     
     // Start with first prompt
+    console.log('Sending first prompt to content script:', prompts[currentPromptIndex]);
+    console.log('First prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
     chrome.tabs.sendMessage(targetTab.id, {
       type: "nextPrompt",
       prompt: prompts[currentPromptIndex]
@@ -360,9 +422,83 @@ function saveResponsesToFile() {
   }
 }
 
+async function savePromptOutputToAPI(responseData) {
+  try {
+    // Debug logging to see the responseData structure
+    console.log('savePromptOutputToAPI called with responseData:', responseData);
+    console.log('responseData.brand_id:', responseData.brand_id);
+    console.log('responseData.prompt_id:', responseData.prompt_id);
+    
+    // Create API payload by removing the original_prompt field (not needed for API)
+    const apiPayload = { ...responseData };
+    delete apiPayload.original_prompt;
+
+    console.log('Saving prompt output to API:', apiPayload);
+
+    // Validate required fields before sending
+    if (!apiPayload.brand_id) {
+      console.error('Missing brand_id in API payload. responseData:', responseData);
+      console.error('Current global brand_id:', currentBrandId);
+      console.error('Request brandId:', responseData.brand_id);
+      throw new Error('Missing required brand_id field');
+    }
+
+    const response = await fetch(`${API_BASE_URL}/prompt-outputs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${anonKey}`,
+        'apikey': anonKey,
+        'x-client-info': 'supabase-js/2.0.0'
+      },
+      body: JSON.stringify(apiPayload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    if (result.success) {
+      console.log('Prompt output saved successfully:', result.data);
+    } else {
+      throw new Error(result.error || 'Failed to save prompt output');
+    }
+
+  } catch (error) {
+    console.error('Failed to save prompt output to API:', error);
+    // Don't throw the error to avoid breaking the automation flow
+    // The response is still saved locally
+  }
+}
+
 // Handle tab updates
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId === currentTabId && changeInfo.status === 'complete') {
     console.log(`${currentSite} tab loaded`);
   }
 });
+
+function stopAutomation() {
+  console.log('Stopping automation...');
+  isRunning = false;
+  
+  // Clear any pending timeout for the next prompt
+  if (nextPromptTimeoutId) {
+    clearTimeout(nextPromptTimeoutId);
+    nextPromptTimeoutId = null;
+  }
+  
+  // Notify content script to stop processing
+  if (currentTabId) {
+    chrome.tabs.sendMessage(currentTabId, {
+      type: "stopProcessing"
+    }).catch(error => {
+      console.log('Could not send stop message to content script:', error);
+    });
+  }
+  
+  console.log('Automation stopped');
+}

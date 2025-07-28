@@ -1,6 +1,7 @@
 let isProcessing = false;
 let responseObserver = null;
 let siteHandler = null;
+let stopProcessing = false; // Flag to track if processing should be stopped
 
 // Configuration options
 const CONFIG = {
@@ -42,10 +43,23 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
   console.log('Content script received:', request.type);
   
   if (request.type === "nextPrompt") {
-    if (!isProcessing) {
+    console.log('Content script received nextPrompt:', request.prompt);
+    console.log('Prompt brand_id:', request.prompt.brand_id);
+    console.log('Prompt id:', request.prompt.id);
+    console.log('Full prompt object:', JSON.stringify(request.prompt, null, 2));
+    if (!isProcessing && !stopProcessing) {
       await submitPrompt(request.prompt);
     } else {
-      console.log('Still processing previous prompt, skipping...');
+      console.log('Still processing previous prompt or stopped, skipping...');
+    }
+  } else if (request.type === "stopProcessing") {
+    console.log('Received stop processing message');
+    stopProcessing = true;
+    isProcessing = false;
+    // Clean up any ongoing observers
+    if (responseObserver) {
+      responseObserver.disconnect();
+      responseObserver = null;
     }
   } else if (request.type === "ready") {
     sendResponse({ status: "ready" });
@@ -55,6 +69,14 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
 async function submitPrompt(prompt) {
   try {
     isProcessing = true;
+    stopProcessing = false; // Reset stop flag when starting new prompt
+    
+    // Check if we should stop before starting
+    if (stopProcessing) {
+      console.log('Stop requested before starting prompt processing');
+      return;
+    }
+    
     // Extract the prompt text from the prompt object or use as-is if it's already a string
     const promptText = prompt.text || prompt;
     console.log(`Submitting prompt to ${siteHandler.siteName}:`, promptText);
@@ -62,6 +84,12 @@ async function submitPrompt(prompt) {
     // Create a new prompt fresh window and wait for navigation to complete
     if (CONFIG.createFreshWindow) {
       await createFreshPromptWindow();
+      
+      // Check if we should stop after fresh window creation
+      if (stopProcessing) {
+        console.log('Stop requested after fresh window creation');
+        return;
+      }
       
       // Add additional delay and page readiness check after fresh window creation
       console.log('Waiting for page to be fully ready after fresh window creation...');
@@ -78,16 +106,28 @@ async function submitPrompt(prompt) {
         });
       }
       
+      // Check if we should stop after page load
+      if (stopProcessing) {
+        console.log('Stop requested after page load');
+        return;
+      }
+      
       // Additional delay to ensure DOM is fully rendered and any dynamic content is loaded
       console.log('Waiting additional 3 seconds for DOM to be fully rendered...');
       await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Check if we should stop after DOM rendering delay
+      if (stopProcessing) {
+        console.log('Stop requested after DOM rendering delay');
+        return;
+      }
       
       // Double-check that we're on a fresh page by verifying the input field is empty
       console.log('Verifying we have a fresh input field...');
       let attempts = 0;
       const maxAttempts = 5;
       
-      while (attempts < maxAttempts) {
+      while (attempts < maxAttempts && !stopProcessing) {
         const testInput = await siteHandler.findInputField();
         if (testInput) {
           const currentContent = testInput.textContent || testInput.value;
@@ -108,9 +148,20 @@ async function submitPrompt(prompt) {
         }
       }
       
+      if (stopProcessing) {
+        console.log('Stop requested during input field verification');
+        return;
+      }
+      
       if (attempts >= maxAttempts) {
         console.log('Warning: Could not verify fresh input field after multiple attempts');
       }
+    }
+    
+    // Check if we should stop before clearing response cache
+    if (stopProcessing) {
+      console.log('Stop requested before clearing response cache');
+      return;
     }
     
     // Clear response cache for new prompt
@@ -123,6 +174,12 @@ async function submitPrompt(prompt) {
     
     // Wait for page to be fully loaded with longer timeout
     await waitForElement('textarea, input[type="text"]', 15000);
+    
+    // Check if we should stop after waiting for elements
+    if (stopProcessing) {
+      console.log('Stop requested after waiting for elements');
+      return;
+    }
     
     // Find the input field using site-specific handler
     const input = await siteHandler.findInputField();
@@ -195,6 +252,12 @@ async function submitPrompt(prompt) {
     // Wait a moment for the input to be processed
     await new Promise(resolve => setTimeout(resolve, 500));
     
+    // Check if we should stop after setting the prompt
+    if (stopProcessing) {
+      console.log('Stop requested after setting prompt');
+      return;
+    }
+    
     // Verify the input still exists and has the correct content
     const inputStillExists = document.contains(input);
     const currentContent = input.textContent || input.value;
@@ -241,8 +304,20 @@ async function submitPrompt(prompt) {
       submitButton.click();
     }
     
+    // Check if we should stop before waiting for response
+    if (stopProcessing) {
+      console.log('Stop requested before waiting for response');
+      return;
+    }
+    
     // Wait for response to complete
     const finalResponse = await waitForResponse(prompt, promptText);
+    
+    // Check if we should stop after getting the main response
+    if (stopProcessing) {
+      console.log('Stop requested after getting main response');
+      return;
+    }
     
     // Handle follow-up question for metadata if enabled
     let metadataResponse = null;
@@ -256,8 +331,14 @@ async function submitPrompt(prompt) {
       }
     }
     
+    // Check if we should stop before sending response back
+    if (stopProcessing) {
+      console.log('Stop requested before sending response back');
+      return;
+    }
+    
     // Send the main response back to background script with metadata
-    chrome.runtime.sendMessage({
+    const messageData = {
       type: "saveResponse",
       prompt: prompt.text || prompt, // Handle both prompt object and string
       response: finalResponse,
@@ -273,7 +354,11 @@ async function submitPrompt(prompt) {
       active: prompt.active,
       createdAt: prompt.created_at,
       metadata: metadataResponse // Add metadata if available
-    });
+    };
+    
+    console.log('Content script sending saveResponse message:', messageData);
+    console.log('Message brandId:', messageData.brandId);
+    chrome.runtime.sendMessage(messageData);
     
   } catch (error) {
     console.error(`Error submitting prompt to ${siteHandler.siteName}:`, error);
@@ -368,8 +453,8 @@ async function waitForResponse(prompt, promptText, options = {}) {
     
     // Function to check if response is stable (no longer changing)
     const checkResponseStability = async () => {
-      if (isResolved) {
-        return; // Don't check if already resolved
+      if (isResolved || stopProcessing) {
+        return; // Don't check if already resolved or stopped
       }
       
       const currentResponse = await siteHandler.extractLatestResponse();
@@ -413,6 +498,13 @@ async function waitForResponse(prompt, promptText, options = {}) {
     
     // Start observing for response
     responseObserver = new MutationObserver(async (mutations) => {
+      // Check if we should stop processing
+      if (stopProcessing) {
+        cleanup();
+        reject(new Error('Processing stopped by user'));
+        return;
+      }
+      
       // Check for response changes
       const currentResponse = await siteHandler.extractLatestResponse();
       if (currentResponse && currentResponse.trim().length > 0) {
@@ -439,11 +531,11 @@ async function waitForResponse(prompt, promptText, options = {}) {
       // Start stability checking after a short delay
       setTimeout(() => {
         const runStabilityCheck = async () => {
-          if (isResolved) {
-            return; // Don't schedule next check if already resolved
+          if (isResolved || stopProcessing) {
+            return; // Don't schedule next check if already resolved or stopped
           }
           await checkResponseStability();
-          if (!isResolved) {
+          if (!isResolved && !stopProcessing) {
             stabilityCheck = setTimeout(runStabilityCheck, config.stabilityInterval);
           }
         };
@@ -467,6 +559,12 @@ async function handleFollowUpQuestion(originalPrompt, originalResponse) {
     console.log('=== Starting Follow-up Question for Metadata ===');
     console.log('Original prompt:', originalPrompt.text || originalPrompt);
     console.log('Original response length:', originalResponse.length);
+    
+    // Check if we should stop before starting follow-up
+    if (stopProcessing) {
+      console.log('Stop requested before starting follow-up question');
+      return null;
+    }
     
     // Create the follow-up question that captures metadata about the previous response
     const followUpPrompt = `Please analyze my previous response in this conversation and return the following structured metadata as JSON:
@@ -500,6 +598,12 @@ Please ensure all values are exactly as specified in the options above. For stri
     // Wait a moment for the page to be ready for the next input
     await new Promise(resolve => setTimeout(resolve, 5000)); // Increased from 3 to 5 seconds
     
+    // Check if we should stop after waiting
+    if (stopProcessing) {
+      console.log('Stop requested after waiting for page readiness');
+      return null;
+    }
+    
     // Find the input field
     const input = await siteHandler.findInputField();
     
@@ -521,6 +625,12 @@ Please ensure all values are exactly as specified in the options above. For stri
     
     // Wait a moment for the input to be processed
     await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Check if we should stop after setting the follow-up question
+    if (stopProcessing) {
+      console.log('Stop requested after setting follow-up question');
+      return null;
+    }
     
     // Find and click submit button
     const submitButton = await siteHandler.findSubmitButton();
