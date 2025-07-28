@@ -467,8 +467,35 @@ async function waitForResponse(prompt, promptText, options = {}) {
           console.log(`${siteHandler.siteName} ${responseType} response stable for ${stableCount}/${config.requiredStableChecks} checks`);
           
           if (stableCount >= config.requiredStableChecks) {
-            console.log(`${siteHandler.siteName} ${responseType} response is stable, capturing final response`);
-            handleResponse(currentResponse, 'stability check');
+            console.log(`${siteHandler.siteName} ${responseType} response is stable, checking for copy button...`);
+            
+            // Check for copy button existence before proceeding with handleResponse
+            let copyButtonExists = false;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              console.log(`Copy button check attempt ${attempt}/3 for ${siteHandler.siteName} ${responseType} response`);
+              
+              // Try to extract markdown via copy button to check if it exists
+              const markdownCheck = await siteHandler.extractMarkdownViaCopyButton(currentResponse);
+              if (markdownCheck) {
+                copyButtonExists = true;
+                // console.log(`Copy button found on attempt ${attempt} for ${siteHandler.siteName} ${responseType} response`);
+                break;
+              }
+              
+              // Wait a bit before next attempt
+              if (attempt < 3) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            }
+            
+            if (copyButtonExists) {
+              console.log(`${siteHandler.siteName} ${responseType} response is stable and copy button exists, capturing final response`);
+              handleResponse(currentResponse, 'stability check');
+            } else {
+              console.log(`${siteHandler.siteName} ${responseType} response is stable but no copy button found after 3 attempts, continuing to wait...`);
+              // Reset stability counter to continue waiting for copy button
+              stableCount = 0;
+            }
             return;
           }
         } else {
@@ -481,8 +508,35 @@ async function waitForResponse(prompt, promptText, options = {}) {
             console.log(`Small change detected on ${siteHandler.siteName} ${responseType} (${changeRatio.toFixed(3)}), counting as stable: ${stableCount}/${config.requiredStableChecks}`);
             
             if (stableCount >= config.requiredStableChecks) {
-              console.log(`${siteHandler.siteName} ${responseType} response is stable after small changes, capturing final response`);
-              handleResponse(currentResponse, 'stability check');
+              console.log(`${siteHandler.siteName} ${responseType} response is stable after small changes, checking for copy button...`);
+              
+              // Check for copy button existence before proceeding with handleResponse
+              let copyButtonExists = false;
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                console.log(`Copy button check attempt ${attempt}/3 for ${siteHandler.siteName} ${responseType} response (small changes)`);
+                
+                // Try to extract markdown via copy button to check if it exists
+                const markdownCheck = await siteHandler.extractMarkdownViaCopyButton(currentResponse);
+                if (markdownCheck) {
+                  copyButtonExists = true;
+                  // console.log(`Copy button found on attempt ${attempt} for ${siteHandler.siteName} ${responseType} response (small changes)`);
+                  break;
+                }
+                
+                // Wait a bit before next attempt
+                if (attempt < 3) {
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+              }
+              
+              if (copyButtonExists) {
+                console.log(`${siteHandler.siteName} ${responseType} response is stable after small changes and copy button exists, capturing final response`);
+                handleResponse(currentResponse, 'stability check');
+              } else {
+                console.log(`${siteHandler.siteName} ${responseType} response is stable after small changes but no copy button found after 3 attempts, continuing to wait...`);
+                // Reset stability counter to continue waiting for copy button
+                stableCount = 0;
+              }
               return;
             }
           } else {
@@ -513,7 +567,7 @@ async function waitForResponse(prompt, promptText, options = {}) {
         if (currentText !== lastResponseText) {
           stableCount = 0; // Reset stability counter when response changes
           lastResponseText = currentText;
-          console.log(`${siteHandler.siteName} ${responseType} response updated via mutation observer. New length:`, currentText.length);
+          // console.log(`${siteHandler.siteName} ${responseType} response updated via mutation observer. New length:`, currentText.length);
         }
       }
     });

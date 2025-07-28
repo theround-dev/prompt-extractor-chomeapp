@@ -9,6 +9,26 @@ let currentBrandId = null; // Add global variable to store brand_id
 let promptSource = 'local'; // 'local' or 'batch'
 let nextPromptTimeoutId = null; // Track the timeout for the next prompt
 
+// Helper function to validate prompt has brand_id
+function validatePromptBrandId(prompt, promptIndex) {
+  if (!prompt || !prompt.brand_id) {
+    console.log('validatePromptBrandId called with prompt:', prompt);
+    console.error(`Prompt at index ${promptIndex} is missing brand_id:`, prompt);
+    throw new Error(`Prompt at index ${promptIndex} is missing required brand_id field`);
+  }
+  return true;
+}
+
+// Helper function to validate API payload has brand_id
+function validateApiPayloadBrandId(apiPayload, context = 'API payload') {
+  if (!apiPayload || !apiPayload.brand_id) {
+    console.error(`Missing brand_id in ${context}:`, apiPayload);
+    console.error('Current global brand_id:', currentBrandId);
+    throw new Error(`Missing required brand_id field in ${context}`);
+  }
+  return true;
+}
+
 // API configuration
 const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
 const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
@@ -38,6 +58,23 @@ async function loadLocalPrompts() {
     prompts = await result.json();
     console.log('Local prompts loaded:', prompts.length);
     console.log('First prompt structure:', prompts[0]);
+    
+    // Log all prompts that will be run
+    console.log('=== PROMPTS TO BE RUN (LOCAL) ===');
+    console.log(`Total prompts: ${prompts.length}`);
+    // prompts.forEach((prompt, index) => {
+    //   console.log(`Prompt ${index + 1}/${prompts.length}:`);
+    //   console.log(`  ID: ${prompt.id}`);
+    //   console.log(`  Text: ${prompt.text}`);
+    //   console.log(`  Category: ${prompt.category}`);
+    //   console.log(`  Tags: ${prompt.tags}`);
+    //   console.log(`  Brand ID: ${prompt.brand_id}`);
+    //   console.log(`  Approved: ${prompt.approved}`);
+    //   console.log(`  Active: ${prompt.active}`);
+    //   console.log(`  Created: ${prompt.created_at}`);
+    //   console.log('  ---');
+    // });
+    console.log('=== END PROMPTS LOG ===');
     
     // Extract brand_id from the first prompt for local prompts
     if (prompts.length > 0 && prompts[0].brand_id) {
@@ -117,10 +154,35 @@ async function loadBatchPrompts(batchId) {
     const promptsData = await promptsResponse.json();
     
     if (promptsData.success && promptsData.data && promptsData.data.prompts) {
-      prompts = promptsData.data.prompts;
+      // Enhance prompts with batch_id and brand_id
+      prompts = promptsData.data.prompts.map(prompt => ({
+        ...prompt,
+        batch_id: batchId,
+        brand_id: brandId
+      }));
+      
       console.log('Batch prompts loaded:', prompts.length);
       console.log('First batch prompt structure:', prompts[0]);
       console.log('First batch prompt brand_id:', prompts[0]?.brand_id);
+      
+      // Log all prompts that will be run
+      console.log('=== PROMPTS TO BE RUN (BATCH) ===');
+      console.log(`Total prompts: ${prompts.length}`);
+      console.log(`Batch ID: ${batchId}`);
+      console.log(`Brand ID: ${brandId}`);
+      prompts.forEach((prompt, index) => {
+        console.log(`Prompt ${index + 1}/${prompts.length}:`);
+        console.log(`  ID: ${prompt.id}`);
+        console.log(`  Text: ${prompt.text}`);
+        console.log(`  Category: ${prompt.category}`);
+        console.log(`  Tags: ${prompt.tags}`);
+        console.log(`  Brand ID: ${prompt.brand_id}`);
+        console.log(`  Approved: ${prompt.approved}`);
+        console.log(`  Active: ${prompt.active}`);
+        console.log(`  Created: ${prompt.created_at}`);
+        console.log('  ---');
+      });
+      console.log('=== END PROMPTS LOG ===');
     } else {
       throw new Error(promptsData.error || 'Failed to load batch prompts');
     }
@@ -187,16 +249,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Continue with next prompt only if still running
     currentPromptIndex++;
     if (currentPromptIndex < prompts.length && isRunning) {
-              nextPromptTimeoutId = setTimeout(() => {
-          if (isRunning) { // Double-check before sending next prompt
+      // Helper function to send next valid prompt
+      const sendNextValidPrompt = () => {
+        if (!isRunning) return;
+        
+        // Find next prompt with valid brand_id
+        while (currentPromptIndex < prompts.length) {
+          try {
+            validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
+            // If we get here, the prompt is valid
             console.log('Sending next prompt to content script:', prompts[currentPromptIndex]);
             console.log('Next prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
             chrome.tabs.sendMessage(sender.tab.id, {
               type: "nextPrompt",
               prompt: prompts[currentPromptIndex]
             });
+            return; // Exit the function
+          } catch (error) {
+            console.error('Skipping prompt due to missing brand_id:', error.message);
+            currentPromptIndex++;
           }
-        }, 3000); // Wait 3 seconds between prompts
+        }
+        
+        // If we get here, no more valid prompts
+        if (currentPromptIndex >= prompts.length) {
+          isRunning = false;
+          console.log('All prompts completed (some were skipped due to missing brand_id)');
+          try {
+            saveResponsesToFile();
+          } catch (saveError) {
+            console.error('Failed to save responses to file:', saveError);
+            chrome.storage.local.set({ 
+              responses: responses,
+              completed_timestamp: new Date().toISOString()
+            });
+          }
+        }
+      };
+      
+      nextPromptTimeoutId = setTimeout(sendNextValidPrompt, 3000); // Wait 3 seconds between prompts
     } else {
       if (currentPromptIndex >= prompts.length) {
         isRunning = false;
@@ -294,6 +385,14 @@ async function startAutomation(source = 'local', batchId = null) {
       throw new Error('No prompts available');
     }
     
+    // Log automation summary
+    console.log('=== AUTOMATION SUMMARY ===');
+    console.log(`Prompt source: ${source}`);
+    console.log(`Total prompts to process: ${prompts.length}`);
+    console.log(`Batch ID: ${batchId || 'N/A (local prompts)'}`);
+    console.log(`Brand ID: ${currentBrandId || 'Not set yet'}`);
+    console.log('=== END AUTOMATION SUMMARY ===');
+    
     // Ensure we have a brand_id
     if (!currentBrandId) {
       console.warn('No brand_id found, attempting to extract from first prompt...');
@@ -349,6 +448,10 @@ async function startAutomation(source = 'local', batchId = null) {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
+    // Validate first prompt has brand_id before sending
+    console.log("FIRST PROMPT", prompts[currentPromptIndex]);
+    validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
+    
     // Start with first prompt
     console.log('Sending first prompt to content script:', prompts[currentPromptIndex]);
     console.log('First prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
@@ -389,26 +492,53 @@ function saveResponsesToFile() {
     const jsonString = JSON.stringify(data, null, 2);
     const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonString);
     
-    const sourceSuffix = promptSource === 'batch' ? `_batch_${currentBatchId}` : '_local';
-    const filename = `${currentSite}_responses${sourceSuffix}_${new Date().toISOString().split('T')[0]}.json`;
-    
-    chrome.downloads.download({
-      url: dataUrl,
-      filename: filename,
-      saveAs: true
-    }, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        console.error('Download failed:', chrome.runtime.lastError);
-        // Fallback: save to storage
-        chrome.storage.local.set({ 
-          responses_backup: responses,
-          backup_timestamp: new Date().toISOString()
-        }, () => {
-          console.log('Responses saved to storage as backup');
+    // Generate filename with batch name, date, and randomized number
+    const generateFilename = () => {
+      const date = new Date().toISOString().split('T')[0];
+      const randomNumber = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+      
+      if (promptSource === 'batch' && currentBatchId) {
+        // Get batch name from storage
+        return new Promise((resolve) => {
+          chrome.storage.local.get(['selectedBatchName'], function(result) {
+            let batchName = result.selectedBatchName || 'unknown_batch';
+            
+            // Clean the batch name for filename (remove special characters, limit length)
+            batchName = batchName
+              .replace(/[^a-zA-Z0-9\s-_]/g, '') // Remove special characters except spaces, hyphens, underscores
+              .replace(/\s+/g, '_') // Replace spaces with underscores
+              .substring(0, 50); // Limit length
+            
+            const filename = `${batchName}_${date}_v2332_${randomNumber}.json`;
+            resolve(filename);
+          });
         });
       } else {
-        console.log('Download started with ID:', downloadId);
+        // For local prompts, use a different format
+        const filename = `local_prompts_${date}_v2332_${randomNumber}.json`;
+        return Promise.resolve(filename);
       }
+    };
+    
+    generateFilename().then(filename => {
+      chrome.downloads.download({
+        url: dataUrl,
+        filename: filename,
+        saveAs: true
+      }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+          console.error('Download failed:', chrome.runtime.lastError);
+          // Fallback: save to storage
+          chrome.storage.local.set({ 
+            responses_backup: responses,
+            backup_timestamp: new Date().toISOString()
+          }, () => {
+            console.log('Responses saved to storage as backup');
+          });
+        } else {
+          console.log('Download started with ID:', downloadId);
+        }
+      });
     });
   } catch (error) {
     console.error('Error saving responses to file:', error);
@@ -436,12 +566,7 @@ async function savePromptOutputToAPI(responseData) {
     console.log('Saving prompt output to API:', apiPayload);
 
     // Validate required fields before sending
-    if (!apiPayload.brand_id) {
-      console.error('Missing brand_id in API payload. responseData:', responseData);
-      console.error('Current global brand_id:', currentBrandId);
-      console.error('Request brandId:', responseData.brand_id);
-      throw new Error('Missing required brand_id field');
-    }
+    validateApiPayloadBrandId(apiPayload, 'API payload');
 
     const response = await fetch(`${API_BASE_URL}/prompt-outputs`, {
       method: 'POST',

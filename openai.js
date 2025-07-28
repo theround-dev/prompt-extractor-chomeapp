@@ -507,7 +507,7 @@ class OpenAIHandler {
 
   async extractLatestResponse() {
     console.log('=== extractLatestResponse ===');
-    console.log('Extracting latest OpenAI response...');
+    // console.log('Extracting latest OpenAI response...');
     
     // First try to get markdown content using copy button
     // const markdownContent = await this.extractMarkdownViaCopyButton();
@@ -859,7 +859,7 @@ class OpenAIHandler {
   }
 
   isResponseComplete(responseElement) {
-    console.log('=== isResponseComplete ===');
+    // console.log('=== isResponseComplete ===');
     if (!responseElement) return false;
     
     // Check for explicit completion indicators
