@@ -62,6 +62,7 @@ async function loadLocalPrompts() {
     // Log all prompts that will be run
     console.log('=== PROMPTS TO BE RUN (LOCAL) ===');
     console.log(`Total prompts: ${prompts.length}`);
+    console.log(`prompts`,prompts);
     // prompts.forEach((prompt, index) => {
     //   console.log(`Prompt ${index + 1}/${prompts.length}:`);
     //   console.log(`  ID: ${prompt.id}`);
@@ -170,18 +171,19 @@ async function loadBatchPrompts(batchId) {
       console.log(`Total prompts: ${prompts.length}`);
       console.log(`Batch ID: ${batchId}`);
       console.log(`Brand ID: ${brandId}`);
-      prompts.forEach((prompt, index) => {
-        console.log(`Prompt ${index + 1}/${prompts.length}:`);
-        console.log(`  ID: ${prompt.id}`);
-        console.log(`  Text: ${prompt.text}`);
-        console.log(`  Category: ${prompt.category}`);
-        console.log(`  Tags: ${prompt.tags}`);
-        console.log(`  Brand ID: ${prompt.brand_id}`);
-        console.log(`  Approved: ${prompt.approved}`);
-        console.log(`  Active: ${prompt.active}`);
-        console.log(`  Created: ${prompt.created_at}`);
-        console.log('  ---');
-      });
+      console.log(`prompts`,prompts);
+      // prompts.forEach((prompt, index) => {
+      //   console.log(`Prompt ${index + 1}/${prompts.length}:`);
+      //   console.log(`  ID: ${prompt.id}`);
+      //   console.log(`  Text: ${prompt.text}`);
+      //   console.log(`  Category: ${prompt.category}`);
+      //   console.log(`  Tags: ${prompt.tags}`);
+      //   console.log(`  Brand ID: ${prompt.brand_id}`);
+      //   console.log(`  Approved: ${prompt.approved}`);
+      //   console.log(`  Active: ${prompt.active}`);
+      //   console.log(`  Created: ${prompt.created_at}`);
+      //   console.log('  ---');
+      // });
       console.log('=== END PROMPTS LOG ===');
     } else {
       throw new Error(promptsData.error || 'Failed to load batch prompts');
@@ -201,7 +203,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Create consistent data structure matching API payload
     const responseData = {
       prompt_id: request.promptId,
-      brand_id: currentBrandId, // Use the global brand_id
+      brand_id: request.brandId || currentBrandId, // Use prompt's brandId if available, fallback to global
       response: request.response,
       batch_id: currentBatchId,
       llm_model: currentSite === 'openai' ? 'gpt-4' : 'deepseek-chat',
