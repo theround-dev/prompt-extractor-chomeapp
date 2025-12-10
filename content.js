@@ -7,7 +7,7 @@ let stopProcessing = false;
 const CONFIG = {
   createFreshWindow: true,
   freshWindowTimeout: 5000,
-  enableFollowUpQuestions: true,
+  enableFollowUpQuestions: false,
   debug: true // Toggle debug logging
 };
 
