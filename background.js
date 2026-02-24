@@ -307,6 +307,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       }
     }
+  } else if (request.type === "skipPrompt") {
+    console.log('Skipping prompt (response matched prompt):', request.reason);
+    // Do not save - advance to next prompt
+    currentPromptIndex++;
+    if (currentPromptIndex < prompts.length && isRunning) {
+      const sendNextValidPrompt = () => {
+        if (!isRunning) return;
+        while (currentPromptIndex < prompts.length) {
+          try {
+            validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
+            console.log('Sending next prompt to content script:', prompts[currentPromptIndex]);
+            chrome.tabs.sendMessage(sender.tab.id, {
+              type: "nextPrompt",
+              prompt: prompts[currentPromptIndex]
+            });
+            return;
+          } catch (error) {
+            console.error('Skipping prompt due to missing brand_id:', error.message);
+            currentPromptIndex++;
+          }
+        }
+        if (currentPromptIndex >= prompts.length) {
+          isRunning = false;
+          console.log('All prompts completed');
+          try {
+            saveResponsesToFile();
+          } catch (saveError) {
+            console.error('Failed to save responses to file:', saveError);
+            chrome.storage.local.set({
+              responses: responses,
+              completed_timestamp: new Date().toISOString()
+            });
+          }
+        }
+      };
+      nextPromptTimeoutId = setTimeout(sendNextValidPrompt, 3000);
+    } else {
+      if (currentPromptIndex >= prompts.length) {
+        isRunning = false;
+        console.log('All prompts completed');
+        try {
+          saveResponsesToFile();
+        } catch (error) {
+          console.error('Failed to save responses to file:', error);
+          chrome.storage.local.set({
+            responses: responses,
+            completed_timestamp: new Date().toISOString()
+          });
+        }
+      }
+    }
   } else if (request.type === "error") {
     console.error('Content script error:', request.error);
     isRunning = false;

@@ -20,6 +20,20 @@ const logError = (message, ...args) => {
   console.error(message, ...args);
 };
 
+// Response validation helpers
+async function extractResponseFromPage() {
+  const response = await siteHandler.extractLatestResponse();
+  const markdown = await siteHandler.extractMarkdownViaCopyButton();
+  return (markdown || response || '').trim();
+}
+
+function responseMatchesPrompt(response, promptText) {
+  if (!response || !promptText) return true; // Treat empty as invalid
+  const r = response.trim().replace(/\s+/g, ' ');
+  const p = promptText.trim().replace(/\s+/g, ' ');
+  return r === p;
+}
+
 // Site detection and initialization
 function detectSiteAndInitialize() {
   const hostname = window.location.hostname;
@@ -115,9 +129,40 @@ async function submitPrompt(prompt) {
     if (stopProcessing) return;
     
     // Wait for response
-    const finalResponse = await waitForResponse(prompt, promptText);
+    let finalResponse = await waitForResponse(prompt, promptText);
     if (stopProcessing) return;
-    
+
+    // Validation: ensure response is not the same as prompt (retry up to 3 times)
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (stopProcessing) return;
+      if (!responseMatchesPrompt(finalResponse, promptText)) {
+        break; // Valid response
+      }
+      log(`Response matches prompt (attempt ${attempt}/${maxAttempts}), retrying extraction...`);
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2500)); // Wait for page to finish rendering
+        try {
+          finalResponse = await extractResponseFromPage();
+        } catch (err) {
+          logError('Error during retry extraction:', err);
+        }
+      }
+    }
+
+    if (stopProcessing) return;
+
+    // If still invalid after retries, skip save and advance to next prompt
+    if (responseMatchesPrompt(finalResponse, promptText)) {
+      logError(`Response matches prompt after ${maxAttempts} attempts, skipping save`);
+      chrome.runtime.sendMessage({
+        type: "skipPrompt",
+        prompt,
+        reason: "response_matches_prompt"
+      });
+      return;
+    }
+
     // Handle follow-up question if enabled
     let metadataResponse = null;
     if (CONFIG.enableFollowUpQuestions) {
@@ -127,9 +172,9 @@ async function submitPrompt(prompt) {
         logError('Error in follow-up question process:', error);
       }
     }
-    
+
     if (stopProcessing) return;
-    
+
     // Send response back
     const messageData = {
       type: "saveResponse",
@@ -148,7 +193,7 @@ async function submitPrompt(prompt) {
       createdAt: prompt.created_at,
       metadata: metadataResponse
     };
-    
+
     chrome.runtime.sendMessage(messageData);
     
   } catch (error) {
