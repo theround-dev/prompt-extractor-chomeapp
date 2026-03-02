@@ -3,6 +3,12 @@
   "name": "AI Chat Automator",
   "version": "1.0",
   "description": "Automates prompts with DeepSeek Chat and OpenAI Chat",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ai-chat-automator@brandsight.ai",
+      "strict_min_version": "109.0"
+    }
+  },
   "permissions": [
     "tabs",
     "storage",

@@ -493,7 +493,7 @@ async function startAutomation(source = 'local', batchId = null) {
       await chrome.tabs.sendMessage(targetTab.id, { type: "ready" });
     } catch (error) {
       console.log('Content script not ready, injecting...');
-      const files = targetSite === 'openai' ? ['openai.js', 'content.js'] : ['deepseek.js', 'content.js'];
+      const files = targetSite === 'openai' ? ['/openai.js', '/content.js'] : ['/deepseek.js', '/content.js'];
       await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
         files: files
