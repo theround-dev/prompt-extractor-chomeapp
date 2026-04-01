@@ -375,6 +375,11 @@ class DeepSeekHandler {
     return document.body; // Fallback to body
   }
 
+  getSafeScrollElement() {
+    const container = this.findChatContainer();
+    return container || document.scrollingElement || document.documentElement;
+  }
+
   async extractLatestResponse() {
     console.log('Extracting latest DeepSeek response...');
     

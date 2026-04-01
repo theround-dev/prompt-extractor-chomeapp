@@ -2,6 +2,11 @@ let isProcessing = false;
 let responseObserver = null;
 let siteHandler = null;
 let stopProcessing = false;
+let automationConfig = {
+  delayExecutionEnabled: false,
+  delayProfile: 'balanced'
+};
+let lastThrottleSignalAt = 0;
 
 // Configuration
 const CONFIG = {
@@ -64,6 +69,10 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
   
   switch (request.type) {
     case "nextPrompt":
+      automationConfig = {
+        delayExecutionEnabled: Boolean(request.automationConfig?.delayExecutionEnabled),
+        delayProfile: request.automationConfig?.delayProfile || 'balanced'
+      };
       if (!isProcessing && !stopProcessing) {
         await submitPrompt(request.prompt);
       } else {
@@ -94,6 +103,9 @@ async function submitPrompt(prompt) {
     
     const promptText = prompt.text || prompt;
     log(`Submitting prompt to ${siteHandler.siteName}:`, promptText);
+    await performHumanLikeDelayTactics();
+    if (stopProcessing) return;
+    detectAndReportThrottleModal();
 
     // Create fresh window if enabled
     if (CONFIG.createFreshWindow) {
@@ -386,6 +398,7 @@ async function waitForResponse(prompt, promptText, options = {}) {
     
     const checkResponseStability = async () => {
       if (isResolved || stopProcessing) return;
+      detectAndReportThrottleModal();
       
       const currentResponse = await siteHandler.extractLatestResponse();
       
@@ -641,6 +654,70 @@ async function createFreshPromptWindow() {
     
     checkNavigation();
   });
+}
+
+function getProfileRanges() {
+  if (automationConfig.delayProfile === 'conservative') {
+    return { idleMin: 600, idleMax: 2200, hesitationMin: 400, hesitationMax: 1400 };
+  }
+  if (automationConfig.delayProfile === 'aggressive_humanlike') {
+    return { idleMin: 1800, idleMax: 6500, hesitationMin: 1200, hesitationMax: 3500 };
+  }
+  return { idleMin: 1200, idleMax: 4000, hesitationMin: 800, hesitationMax: 2200 };
+}
+
+function randomMs(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function performHumanLikeDelayTactics() {
+  if (!automationConfig.delayExecutionEnabled || stopProcessing) return;
+
+  const ranges = getProfileRanges();
+  await new Promise(resolve => setTimeout(resolve, randomMs(ranges.idleMin, ranges.idleMax)));
+  if (stopProcessing) return;
+
+  const scrollTarget = siteHandler.getSafeScrollElement ? siteHandler.getSafeScrollElement() : document.scrollingElement;
+  if (scrollTarget && typeof scrollTarget.scrollBy === 'function' && Math.random() < 0.75) {
+    scrollTarget.scrollBy({ top: randomMs(40, 220), behavior: 'smooth' });
+    await new Promise(resolve => setTimeout(resolve, randomMs(250, 900)));
+    if (stopProcessing) return;
+    scrollTarget.scrollBy({ top: -randomMs(20, 140), behavior: 'smooth' });
+  }
+
+  if (Math.random() < 0.6) {
+    const input = await siteHandler.findInputField();
+    if (input) {
+      input.focus();
+      await new Promise(resolve => setTimeout(resolve, randomMs(100, 500)));
+      input.blur();
+      await new Promise(resolve => setTimeout(resolve, randomMs(100, 500)));
+      input.focus();
+    }
+  }
+
+  await new Promise(resolve => setTimeout(resolve, randomMs(ranges.hesitationMin, ranges.hesitationMax)));
+}
+
+function detectAndReportThrottleModal() {
+  const now = Date.now();
+  if (now - lastThrottleSignalAt < 10000) {
+    return false;
+  }
+  const pageText = (document.body?.innerText || '').toLowerCase();
+  const isThrottle = pageText.includes('too many requests')
+    || pageText.includes('temporarily limited')
+    || pageText.includes('wait a few minutes');
+
+  if (isThrottle) {
+    lastThrottleSignalAt = now;
+    chrome.runtime.sendMessage({
+      type: 'throttleDetected',
+      site: siteHandler?.siteName || 'Unknown',
+      detectedAt: new Date().toISOString()
+    });
+  }
+  return isThrottle;
 }
 
 // Event listeners
