@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const status = document.getElementById('status');
   const progress = document.getElementById('progress');
   const progressText = document.getElementById('progressText');
+  const delayIndicator = document.getElementById('delayIndicator');
+  const delayIndicatorText = document.getElementById('delayIndicatorText');
   
   // New elements for batch functionality
   const localPromptsRadio = document.getElementById('localPrompts');
@@ -13,6 +15,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const batchSelect = document.getElementById('batchSelect');
   const refreshBatchesBtn = document.getElementById('refreshBatches');
   const batchLoading = document.getElementById('batchLoading');
+  const delayExecutionEnabled = document.getElementById('delayExecutionEnabled');
+  const delayProfileContainer = document.getElementById('delayProfileContainer');
+  const delayProfileSelect = document.getElementById('delayProfileSelect');
   
   // API configuration
   const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
@@ -58,6 +63,15 @@ document.addEventListener('DOMContentLoaded', function() {
   refreshBatchesBtn.addEventListener('click', function() {
     loadBatches();
   });
+
+  delayExecutionEnabled.addEventListener('change', function() {
+    updateDelayProfileVisibility(this.checked);
+    saveDelaySettings(this.checked, delayProfileSelect.value);
+  });
+
+  delayProfileSelect.addEventListener('change', function() {
+    saveDelaySettings(delayExecutionEnabled.checked, this.value);
+  });
   
   // Start button click
   startBtn.addEventListener('click', function() {
@@ -77,7 +91,9 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.runtime.sendMessage({ 
       type: 'startAutomation',
       promptSource: promptSource,
-      batchId: promptSource === 'batch' ? batchSelect.value : null
+      batchId: promptSource === 'batch' ? batchSelect.value : null,
+      delayExecutionEnabled: delayExecutionEnabled.checked,
+      delayProfile: delayProfileSelect.value
     }, function(response) {
       if (response && response.success) {
         updateStatus();
@@ -213,7 +229,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   function loadSavedSettings() {
-    chrome.storage.local.get(['promptSource', 'selectedBatchId'], function(result) {
+    chrome.storage.local.get(['promptSource', 'selectedBatchId', 'delayExecutionEnabled', 'delayProfile'], function(result) {
       if (result.promptSource === 'batch') {
         automatedBatchRadio.checked = true;
         localPromptsRadio.checked = false;
@@ -230,6 +246,12 @@ document.addEventListener('DOMContentLoaded', function() {
         automatedBatchRadio.checked = false;
         batchSelector.style.display = 'none';
       }
+
+      const isDelayEnabled = Boolean(result.delayExecutionEnabled);
+      const profile = result.delayProfile || 'balanced';
+      delayExecutionEnabled.checked = isDelayEnabled;
+      delayProfileSelect.value = profile;
+      updateDelayProfileVisibility(isDelayEnabled);
     });
   }
   
@@ -242,6 +264,17 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.storage.local.set({ 
       selectedBatchId: batchId,
       selectedBatchName: batchName
+    });
+  }
+
+  function updateDelayProfileVisibility(isEnabled) {
+    delayProfileContainer.style.display = isEnabled ? 'block' : 'none';
+  }
+
+  function saveDelaySettings(enabled, profile) {
+    chrome.storage.local.set({
+      delayExecutionEnabled: Boolean(enabled),
+      delayProfile: profile || 'balanced'
     });
   }
   
@@ -259,6 +292,8 @@ document.addEventListener('DOMContentLoaded', function() {
           progress.style.display = 'block';
           progressText.textContent = `Processing: ${response.currentPromptIndex + 1}/${response.totalPrompts}`;
         }
+
+        updateDelayIndicator(response);
       } else {
         status.textContent = 'Ready to start';
         status.className = 'status stopped';
@@ -267,16 +302,35 @@ document.addEventListener('DOMContentLoaded', function() {
         startBtn.disabled = false;
         stopBtn.disabled = false; // Reset stop button state
         progress.style.display = 'none';
+        delayIndicator.style.display = 'none';
       }
     });
   }
+
+  function updateDelayIndicator(response) {
+    const delayEnabled = Boolean(response.automationConfig?.delayExecutionEnabled);
+    const msRemaining = response.msUntilNextPrompt;
+    if (!delayEnabled || msRemaining === null || msRemaining === undefined) {
+      delayIndicator.style.display = 'none';
+      return;
+    }
+
+    const seconds = Math.ceil(msRemaining / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    const timeLabel = minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
+    const reason = response.nextPromptDelayReason ? ` (${response.nextPromptDelayReason})` : '';
+
+    delayIndicatorText.textContent = `Delay Execution active: next prompt in ${timeLabel}${reason}`;
+    delayIndicator.style.display = 'flex';
+  }
   
-  // Update status every 2 seconds when running
+  // Update status every second when running for smoother countdown
   setInterval(function() {
     chrome.runtime.sendMessage({ type: 'getStatus' }, function(response) {
       if (response && response.isRunning) {
         updateStatus();
       }
     });
-  }, 2000);
+  }, 1000);
 }); 

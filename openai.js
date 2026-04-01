@@ -292,6 +292,11 @@ class OpenAIHandler {
     return document.body;
   }
 
+  getSafeScrollElement() {
+    const container = this.findChatContainer();
+    return container || document.scrollingElement || document.documentElement;
+  }
+
   async extractLatestResponse() {
     const input = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
     const currentPrompt = input ? (input.getAttribute('contenteditable') === 'true' ? input.textContent : input.value) : '';

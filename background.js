@@ -8,6 +8,22 @@ let currentBatchId = null;
 let currentBrandId = null; // Add global variable to store brand_id
 let promptSource = 'local'; // 'local' or 'batch'
 let nextPromptTimeoutId = null; // Track the timeout for the next prompt
+let nextPromptScheduledAt = null;
+let nextPromptDelayReason = null;
+let automationConfig = {
+  delayExecutionEnabled: false,
+  delayProfile: 'balanced'
+};
+let throttleStrikeCount = 0;
+let throttleSignalUntil = 0;
+let dynamicThrottleUntil = 0;
+let rateLimitEvents = [];
+
+const DELAY_PROFILES = {
+  conservative: { minMs: 8000, maxMs: 45000, longPauseChance: 0.1, longMinMs: 60000, longMaxMs: 90000 },
+  balanced: { minMs: 20000, maxMs: 90000, longPauseChance: 0.2, longMinMs: 120000, longMaxMs: 180000 },
+  aggressive_humanlike: { minMs: 45000, maxMs: 180000, longPauseChance: 0.35, longMinMs: 180000, longMaxMs: 300000 }
+};
 
 // Helper function to validate prompt has brand_id
 function validatePromptBrandId(prompt, promptIndex) {
@@ -29,6 +45,136 @@ function validateApiPayloadBrandId(apiPayload, context = 'API payload') {
   return true;
 }
 
+function randomBetween(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function parseRetryAfterSeconds(headerValue) {
+  if (!headerValue) return null;
+  const asNumber = Number(headerValue);
+  if (!Number.isNaN(asNumber) && asNumber >= 0) {
+    return asNumber;
+  }
+  const retryDate = Date.parse(headerValue);
+  if (!Number.isNaN(retryDate)) {
+    const diffSeconds = Math.ceil((retryDate - Date.now()) / 1000);
+    return diffSeconds > 0 ? diffSeconds : 0;
+  }
+  return null;
+}
+
+function recordRateLimitEvent(source = 'unknown') {
+  const now = Date.now();
+  rateLimitEvents.push(now);
+  rateLimitEvents = rateLimitEvents.filter(ts => now - ts <= 60000);
+  throttleStrikeCount++;
+  throttleSignalUntil = now + 5 * 60 * 1000;
+  console.warn(`[rate-limit] event from ${source}; ${rateLimitEvents.length} events in last 60s`);
+  if (rateLimitEvents.length >= 3) {
+    dynamicThrottleUntil = Math.max(dynamicThrottleUntil, now + 5 * 60 * 1000);
+    console.warn('[rate-limit] 3+ events in 60s, enabling 50% rate reduction window');
+  }
+}
+
+function computeBackoffDelayMs(retries, retryAfterSeconds = null) {
+  if (retryAfterSeconds !== null && retryAfterSeconds !== undefined) {
+    return Math.min(60000, Math.max(0, retryAfterSeconds * 1000));
+  }
+  const baseDelay = Math.min(60000, 1000 * (2 ** retries));
+  const jittered = Math.floor(baseDelay * (0.5 + Math.random()));
+  return Math.min(60000, Math.max(1000, jittered));
+}
+
+function computeNextDelayMs() {
+  if (!automationConfig.delayExecutionEnabled) {
+    return { delayMs: 3000, reason: 'fixed_default' };
+  }
+
+  const profile = DELAY_PROFILES[automationConfig.delayProfile] || DELAY_PROFILES.balanced;
+  let delayMs = randomBetween(profile.minMs, profile.maxMs);
+  let reason = 'base+jitter';
+
+  if (Math.random() < profile.longPauseChance) {
+    delayMs = randomBetween(profile.longMinMs, profile.longMaxMs);
+    reason = 'long_pause';
+  }
+
+  const now = Date.now();
+  if (now < throttleSignalUntil) {
+    const multiplier = Math.min(2.5, 1 + throttleStrikeCount * 0.15);
+    delayMs = Math.floor(delayMs * multiplier);
+    reason += '+throttle_backoff';
+  }
+
+  if (now < dynamicThrottleUntil) {
+    delayMs = Math.max(delayMs, profile.minMs * 2);
+    reason += '+dynamic_50pct_rate';
+  }
+
+  return { delayMs, reason };
+}
+
+function sendNextValidPrompt(tabId) {
+  if (!isRunning) return;
+  nextPromptScheduledAt = null;
+  nextPromptDelayReason = null;
+
+  while (currentPromptIndex < prompts.length) {
+    try {
+      validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
+      const promptToSend = prompts[currentPromptIndex];
+      console.log('Sending next prompt to content script:', promptToSend);
+      chrome.tabs.sendMessage(tabId, {
+        type: "nextPrompt",
+        prompt: promptToSend,
+        automationConfig
+      });
+      return;
+    } catch (error) {
+      console.error('Skipping prompt due to missing brand_id:', error.message);
+      currentPromptIndex++;
+    }
+  }
+
+  if (currentPromptIndex >= prompts.length) {
+    isRunning = false;
+    console.log('All prompts completed');
+    try {
+      saveResponsesToFile();
+    } catch (saveError) {
+      console.error('Failed to save responses to file:', saveError);
+      chrome.storage.local.set({
+        responses: responses,
+        completed_timestamp: new Date().toISOString()
+      });
+    }
+  }
+}
+
+function scheduleNextPrompt(tabId) {
+  if (!(currentPromptIndex < prompts.length && isRunning)) {
+    if (currentPromptIndex >= prompts.length) {
+      isRunning = false;
+      try {
+        saveResponsesToFile();
+      } catch (error) {
+        console.error('Failed to save responses to file:', error);
+        chrome.storage.local.set({
+          responses: responses,
+          completed_timestamp: new Date().toISOString()
+        });
+      }
+    }
+    return;
+  }
+
+  const { delayMs, reason } = computeNextDelayMs();
+  console.log(`[delay] waiting ${delayMs}ms before next prompt (${reason})`);
+  nextPromptScheduledAt = Date.now() + delayMs;
+  nextPromptDelayReason = reason;
+  nextPromptTimeoutId = setTimeout(() => sendNextValidPrompt(tabId), delayMs);
+}
+
 // API configuration
 const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
 const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtd2dwbHpkemZmaXZhd2tmbGNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM1MjQyNzYsImV4cCI6MjA2OTEwMDI3Nn0.D-kY79Vdqat9QNIMrJLS0w0dlp3182GIOvXg0GkoxtY';
@@ -37,9 +183,11 @@ const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     // Load saved settings
-    chrome.storage.local.get(['promptSource', 'selectedBatchId'], async function(result) {
+    chrome.storage.local.get(['promptSource', 'selectedBatchId', 'delayExecutionEnabled', 'delayProfile'], async function(result) {
       promptSource = result.promptSource || 'local';
       currentBatchId = result.selectedBatchId;
+      automationConfig.delayExecutionEnabled = Boolean(result.delayExecutionEnabled);
+      automationConfig.delayProfile = result.delayProfile || 'balanced';
       
       if (promptSource === 'local') {
         await loadLocalPrompts();
@@ -246,118 +394,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     
     // Save to API endpoint
-    savePromptOutputToAPI(responseData);
+    savePromptOutputToAPI(responseData).catch(error => {
+      console.error('API save flow failed:', error);
+    });
     
     // Continue with next prompt only if still running
     currentPromptIndex++;
-    if (currentPromptIndex < prompts.length && isRunning) {
-      // Helper function to send next valid prompt
-      const sendNextValidPrompt = () => {
-        if (!isRunning) return;
-        
-        // Find next prompt with valid brand_id
-        while (currentPromptIndex < prompts.length) {
-          try {
-            validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
-            // If we get here, the prompt is valid
-            console.log('Sending next prompt to content script:', prompts[currentPromptIndex]);
-            console.log('Next prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
-            chrome.tabs.sendMessage(sender.tab.id, {
-              type: "nextPrompt",
-              prompt: prompts[currentPromptIndex]
-            });
-            return; // Exit the function
-          } catch (error) {
-            console.error('Skipping prompt due to missing brand_id:', error.message);
-            currentPromptIndex++;
-          }
-        }
-        
-        // If we get here, no more valid prompts
-        if (currentPromptIndex >= prompts.length) {
-          isRunning = false;
-          console.log('All prompts completed (some were skipped due to missing brand_id)');
-          try {
-            saveResponsesToFile();
-          } catch (saveError) {
-            console.error('Failed to save responses to file:', saveError);
-            chrome.storage.local.set({ 
-              responses: responses,
-              completed_timestamp: new Date().toISOString()
-            });
-          }
-        }
-      };
-      
-      nextPromptTimeoutId = setTimeout(sendNextValidPrompt, 3000); // Wait 3 seconds between prompts
-    } else {
-      if (currentPromptIndex >= prompts.length) {
-        isRunning = false;
-        console.log('All prompts completed');
-        // Save all responses to a file
-        try {
-          saveResponsesToFile();
-        } catch (error) {
-          console.error('Failed to save responses to file:', error);
-          // Ensure responses are at least saved to storage
-          chrome.storage.local.set({ 
-            responses: responses,
-            completed_timestamp: new Date().toISOString()
-          });
-        }
-      }
-    }
+    scheduleNextPrompt(sender.tab.id);
   } else if (request.type === "skipPrompt") {
     console.log('Skipping prompt (response matched prompt):', request.reason);
     // Do not save - advance to next prompt
     currentPromptIndex++;
-    if (currentPromptIndex < prompts.length && isRunning) {
-      const sendNextValidPrompt = () => {
-        if (!isRunning) return;
-        while (currentPromptIndex < prompts.length) {
-          try {
-            validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
-            console.log('Sending next prompt to content script:', prompts[currentPromptIndex]);
-            chrome.tabs.sendMessage(sender.tab.id, {
-              type: "nextPrompt",
-              prompt: prompts[currentPromptIndex]
-            });
-            return;
-          } catch (error) {
-            console.error('Skipping prompt due to missing brand_id:', error.message);
-            currentPromptIndex++;
-          }
-        }
-        if (currentPromptIndex >= prompts.length) {
-          isRunning = false;
-          console.log('All prompts completed');
-          try {
-            saveResponsesToFile();
-          } catch (saveError) {
-            console.error('Failed to save responses to file:', saveError);
-            chrome.storage.local.set({
-              responses: responses,
-              completed_timestamp: new Date().toISOString()
-            });
-          }
-        }
-      };
-      nextPromptTimeoutId = setTimeout(sendNextValidPrompt, 3000);
-    } else {
-      if (currentPromptIndex >= prompts.length) {
-        isRunning = false;
-        console.log('All prompts completed');
-        try {
-          saveResponsesToFile();
-        } catch (error) {
-          console.error('Failed to save responses to file:', error);
-          chrome.storage.local.set({
-            responses: responses,
-            completed_timestamp: new Date().toISOString()
-          });
-        }
-      }
-    }
+    scheduleNextPrompt(sender.tab.id);
+  } else if (request.type === "throttleDetected") {
+    console.warn('Throttle signal received from content script:', request);
+    recordRateLimitEvent('content_modal');
   } else if (request.type === "error") {
     console.error('Content script error:', request.error);
     isRunning = false;
@@ -382,7 +433,10 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "startAutomation") {
     if (!isRunning) {
-      startAutomation(request.promptSource, request.batchId).then(() => {
+      startAutomation(request.promptSource, request.batchId, {
+        delayExecutionEnabled: request.delayExecutionEnabled,
+        delayProfile: request.delayProfile
+      }).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {
         console.error('Failed to start automation:', error);
@@ -396,6 +450,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     stopAutomation();
     sendResponse({ success: true });
   } else if (request.type === "getStatus") {
+    const now = Date.now();
+    const msUntilNextPrompt = nextPromptScheduledAt ? Math.max(0, nextPromptScheduledAt - now) : null;
     sendResponse({
       isRunning: isRunning,
       currentPromptIndex: currentPromptIndex,
@@ -403,7 +459,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       responsesCount: responses.length,
       currentSite: currentSite,
       promptSource: promptSource,
-      batchId: currentBatchId
+      batchId: currentBatchId,
+      automationConfig: automationConfig,
+      healthState: now < dynamicThrottleUntil ? 'cooldown' : (now < throttleSignalUntil ? 'slowed' : 'normal'),
+      nextPromptScheduledAt: nextPromptScheduledAt,
+      nextPromptDelayReason: nextPromptDelayReason,
+      msUntilNextPrompt: msUntilNextPrompt
     });
   } else if (request.type === "downloadResponses") {
     try {
@@ -416,7 +477,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-async function startAutomation(source = 'local', batchId = null) {
+async function startAutomation(source = 'local', batchId = null, config = {}) {
   try {
     isRunning = true;
     currentPromptIndex = 0;
@@ -424,6 +485,22 @@ async function startAutomation(source = 'local', batchId = null) {
     promptSource = source;
     currentBatchId = batchId;
     currentBrandId = null; // Reset brand_id
+    throttleStrikeCount = 0;
+    throttleSignalUntil = 0;
+    dynamicThrottleUntil = 0;
+    rateLimitEvents = [];
+    automationConfig = {
+      delayExecutionEnabled: Boolean(
+        config.delayExecutionEnabled !== undefined
+          ? config.delayExecutionEnabled
+          : automationConfig.delayExecutionEnabled
+      ),
+      delayProfile: config.delayProfile || automationConfig.delayProfile || 'balanced'
+    };
+    chrome.storage.local.set({
+      delayExecutionEnabled: automationConfig.delayExecutionEnabled,
+      delayProfile: automationConfig.delayProfile
+    });
     
     // Load prompts based on source
     if (source === 'local') {
@@ -510,7 +587,8 @@ async function startAutomation(source = 'local', batchId = null) {
     console.log('First prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
     chrome.tabs.sendMessage(targetTab.id, {
       type: "nextPrompt",
-      prompt: prompts[currentPromptIndex]
+      prompt: prompts[currentPromptIndex],
+      automationConfig
     });
     
   } catch (error) {
@@ -606,49 +684,91 @@ function saveResponsesToFile() {
 }
 
 async function savePromptOutputToAPI(responseData) {
-  try {
-    // Debug logging to see the responseData structure
-    console.log('savePromptOutputToAPI called with responseData:', responseData);
-    console.log('responseData.brand_id:', responseData.brand_id);
-    console.log('responseData.prompt_id:', responseData.prompt_id);
-    
-    // Create API payload by removing the original_prompt field (not needed for API)
-    const apiPayload = { ...responseData };
-    delete apiPayload.original_prompt;
+  // Debug logging to see the responseData structure
+  console.log('savePromptOutputToAPI called with responseData:', responseData);
+  console.log('responseData.brand_id:', responseData.brand_id);
+  console.log('responseData.prompt_id:', responseData.prompt_id);
 
-    console.log('Saving prompt output to API:', apiPayload);
+  // Create API payload by removing the original_prompt field (not needed for API)
+  const apiPayload = { ...responseData };
+  delete apiPayload.original_prompt;
 
-    // Validate required fields before sending
-    validateApiPayloadBrandId(apiPayload, 'API payload');
+  console.log('Saving prompt output to API:', apiPayload);
 
-    const response = await fetch(`${API_BASE_URL}/prompt-outputs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${anonKey}`,
-        'apikey': anonKey,
-        'x-client-info': 'supabase-js/2.0.0'
-      },
-      body: JSON.stringify(apiPayload)
-    });
+  // Validate required fields before sending
+  validateApiPayloadBrandId(apiPayload, 'API payload');
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+  const maxRetries = 4;
+
+  for (let retries = 0; retries <= maxRetries; retries++) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt-outputs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonKey}`,
+          'apikey': anonKey,
+          'x-client-info': 'supabase-js/2.0.0'
+        },
+        body: JSON.stringify(apiPayload)
+      });
+
+      if (response.status === 429) {
+        const retryAfterHeader = response.headers.get('Retry-After');
+        const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader);
+        recordRateLimitEvent('api_429');
+        console.warn(`[api] 429 received. Retry-After: ${retryAfterHeader || 'none'}`);
+
+        if (retries >= maxRetries) {
+          const bodyText = await response.text();
+          console.error('[api] max retries reached after 429:', bodyText);
+          return;
+        }
+
+        const waitMs = computeBackoffDelayMs(retries, retryAfterSeconds);
+        console.warn(`[api] waiting ${waitMs}ms before retry ${retries + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status >= 500 && retries < maxRetries) {
+          const waitMs = computeBackoffDelayMs(retries);
+          console.warn(`[api] transient ${response.status}, retry in ${waitMs}ms`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
+        if (response.status >= 400 && response.status < 500) {
+          console.error(`Failed to save prompt output to API: non-retriable ${response.status} - ${errorText}`);
+          return;
+        }
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        console.log('Prompt output saved successfully:', result.data);
+        return;
+      }
+
+      if (retries >= maxRetries) {
+        console.error('Failed to save prompt output after retries:', result.error || 'Unknown API error');
+        return;
+      }
+
+      const waitMs = computeBackoffDelayMs(retries);
+      console.warn(`[api] unsuccessful API response, retrying in ${waitMs}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    } catch (error) {
+      if (retries >= maxRetries) {
+        console.error('Failed to save prompt output to API:', error);
+        return;
+      }
+      const waitMs = computeBackoffDelayMs(retries);
+      console.warn(`[api] network/error retry in ${waitMs}ms:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
     }
-
-    const result = await response.json();
-    
-    if (result.success) {
-      console.log('Prompt output saved successfully:', result.data);
-    } else {
-      throw new Error(result.error || 'Failed to save prompt output');
-    }
-
-  } catch (error) {
-    console.error('Failed to save prompt output to API:', error);
-    // Don't throw the error to avoid breaking the automation flow
-    // The response is still saved locally
   }
 }
 
@@ -668,6 +788,8 @@ function stopAutomation() {
     clearTimeout(nextPromptTimeoutId);
     nextPromptTimeoutId = null;
   }
+  nextPromptScheduledAt = null;
+  nextPromptDelayReason = null;
   
   // Notify content script to stop processing
   if (currentTabId) {
