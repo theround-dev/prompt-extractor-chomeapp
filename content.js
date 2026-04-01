@@ -27,6 +27,99 @@ async function extractResponseFromPage() {
   return (markdown || response || '').trim();
 }
 
+// Conversation data capture helpers
+function extractConversationId() {
+  const match = window.location.pathname.match(/\/c\/([a-f0-9-]+)/i);
+  return match ? match[1] : null;
+}
+
+function parseConversationSearchData(conversationData) {
+  if (!conversationData || !conversationData.mapping) return null;
+
+  const searchQueries = [];
+  const searchResultGroups = [];
+
+  for (const node of Object.values(conversationData.mapping)) {
+    const msg = node.message;
+    if (!msg) continue;
+
+    // Extract from search_model_queries in metadata
+    const smq = msg.metadata?.search_model_queries;
+    if (smq?.queries) {
+      for (const q of smq.queries) {
+        if (q && !searchQueries.includes(q)) searchQueries.push(q);
+      }
+    }
+
+    // Extract from code blocks sent to web.run (search_query arrays)
+    if (msg.content?.content_type === 'code' && msg.recipient === 'web.run') {
+      try {
+        const parsed = JSON.parse(msg.content.text);
+        if (Array.isArray(parsed.search_query)) {
+          for (const item of parsed.search_query) {
+            if (item.q && !searchQueries.includes(item.q)) searchQueries.push(item.q);
+          }
+        }
+      } catch {}
+    }
+
+    // Extract search result groups
+    const srg = msg.metadata?.search_result_groups;
+    if (Array.isArray(srg) && srg.length > 0) {
+      searchResultGroups.push(...srg);
+    }
+  }
+
+  return {
+    conversationTitle: conversationData.title || null,
+    searchQueries,
+    searchResultGroups,
+    modelSlug: conversationData.default_model_slug || null
+  };
+}
+
+async function fetchConversationData() {
+  const conversationId = extractConversationId();
+  if (!conversationId) {
+    log('No conversation ID found in URL, skipping conversation data fetch');
+    return null;
+  }
+
+  log('Fetching conversation data for:', conversationId);
+
+  return new Promise((resolve) => {
+    const callbackKey = '__brandSightCapture_' + Date.now();
+    let scriptEl;
+
+    window[callbackKey] = (data) => {
+      delete window[callbackKey];
+      if (scriptEl) scriptEl.remove();
+      resolve(data ? parseConversationSearchData(data) : null);
+    };
+
+    scriptEl = document.createElement('script');
+    scriptEl.textContent = `
+      (function() {
+        var id = ${JSON.stringify(conversationId)};
+        var cb = ${JSON.stringify(callbackKey)};
+        fetch('https://chatgpt.com/backend-api/conversation/' + id, { credentials: 'include' })
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(data) { if (window[cb]) window[cb](data); })
+          .catch(function() { if (window[cb]) window[cb](null); });
+      })();
+    `;
+    document.head.appendChild(scriptEl);
+
+    // Safety timeout: resolve null after 10 seconds if fetch hangs
+    setTimeout(() => {
+      if (window[callbackKey]) {
+        delete window[callbackKey];
+        resolve(null);
+      }
+    }, 10000);
+  });
+}
+
 function responseMatchesPrompt(response, promptText) {
   if (!response || !promptText) return true; // Treat empty as invalid
   const r = response.trim().replace(/\s+/g, ' ');
@@ -175,6 +268,21 @@ async function submitPrompt(prompt) {
 
     if (stopProcessing) return;
 
+    // Fetch conversation search data from backend API (OpenAI only)
+    let conversationData = null;
+    if (siteHandler.siteName === 'OpenAI') {
+      try {
+        conversationData = await fetchConversationData();
+        if (conversationData) {
+          log('Captured conversation search data:', conversationData.searchQueries?.length, 'queries');
+        }
+      } catch (error) {
+        logError('Error fetching conversation data:', error);
+      }
+    }
+
+    if (stopProcessing) return;
+
     // Send response back
     const messageData = {
       type: "saveResponse",
@@ -191,7 +299,8 @@ async function submitPrompt(prompt) {
       approved: prompt.approved,
       active: prompt.active,
       createdAt: prompt.created_at,
-      metadata: metadataResponse
+      metadata: metadataResponse,
+      conversationData: conversationData
     };
 
     chrome.runtime.sendMessage(messageData);

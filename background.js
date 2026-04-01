@@ -221,7 +221,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         created_at: request.createdAt,
         original_metadata: request.metadata,
         site_used: request.site || 'Unknown',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        conversation_search_data: request.conversationData || null
       },
       version_info: {
         app_type: "chrome_extension",
