@@ -120,6 +120,23 @@
       margin-top: 8px;
       display: none;
     }
+    .skip-settings {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #e0e0e0;
+    }
+    .skip-offset {
+      margin-top: 8px;
+      display: none;
+    }
+    .skip-offset select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 12px;
+      background-color: #fff;
+    }
     .delay-profile select {
       width: 100%;
       padding: 8px;
@@ -214,6 +231,24 @@
           <option value="conservative">Conservative (faster)</option>
           <option value="balanced">Balanced</option>
           <option value="aggressive_humanlike">Aggressive human-like</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="skip-settings">
+      <div class="radio-group">
+        <input type="checkbox" id="skipPromptsEnabled">
+        <label for="skipPromptsEnabled">Skip Prompts</label>
+      </div>
+      <div id="skipPromptsContainer" class="skip-offset">
+        <label for="skipPromptsSelect">Start from prompt index:</label>
+        <select id="skipPromptsSelect">
+          <option value="0">0</option>
+          <option value="20">20</option>
+          <option value="40">40</option>
+          <option value="60">60</option>
+          <option value="80">80</option>
+          <option value="100">100</option>
         </select>
       </div>
     </div>

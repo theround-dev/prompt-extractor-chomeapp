@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const delayExecutionEnabled = document.getElementById('delayExecutionEnabled');
   const delayProfileContainer = document.getElementById('delayProfileContainer');
   const delayProfileSelect = document.getElementById('delayProfileSelect');
+  const skipPromptsEnabled = document.getElementById('skipPromptsEnabled');
+  const skipPromptsContainer = document.getElementById('skipPromptsContainer');
+  const skipPromptsSelect = document.getElementById('skipPromptsSelect');
   
   // API configuration
   const API_BASE_URL = 'https://hmwgplzdzffivawkflci.supabase.co/functions/v1/api';
@@ -72,6 +75,15 @@ document.addEventListener('DOMContentLoaded', function() {
   delayProfileSelect.addEventListener('change', function() {
     saveDelaySettings(delayExecutionEnabled.checked, this.value);
   });
+
+  skipPromptsEnabled.addEventListener('change', function() {
+    updateSkipPromptsVisibility(this.checked);
+    saveSkipPromptsSettings(this.checked, skipPromptsSelect.value);
+  });
+
+  skipPromptsSelect.addEventListener('change', function() {
+    saveSkipPromptsSettings(skipPromptsEnabled.checked, this.value);
+  });
   
   // Start button click
   startBtn.addEventListener('click', function() {
@@ -93,7 +105,9 @@ document.addEventListener('DOMContentLoaded', function() {
       promptSource: promptSource,
       batchId: promptSource === 'batch' ? batchSelect.value : null,
       delayExecutionEnabled: delayExecutionEnabled.checked,
-      delayProfile: delayProfileSelect.value
+      delayProfile: delayProfileSelect.value,
+      skipPromptsEnabled: skipPromptsEnabled.checked,
+      skipPromptsCount: Number(skipPromptsSelect.value || 0)
     }, function(response) {
       if (response && response.success) {
         updateStatus();
@@ -229,7 +243,14 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   function loadSavedSettings() {
-    chrome.storage.local.get(['promptSource', 'selectedBatchId', 'delayExecutionEnabled', 'delayProfile'], function(result) {
+    chrome.storage.local.get([
+      'promptSource',
+      'selectedBatchId',
+      'delayExecutionEnabled',
+      'delayProfile',
+      'skipPromptsEnabled',
+      'skipPromptsCount'
+    ], function(result) {
       if (result.promptSource === 'batch') {
         automatedBatchRadio.checked = true;
         localPromptsRadio.checked = false;
@@ -252,6 +273,14 @@ document.addEventListener('DOMContentLoaded', function() {
       delayExecutionEnabled.checked = isDelayEnabled;
       delayProfileSelect.value = profile;
       updateDelayProfileVisibility(isDelayEnabled);
+
+      const isSkipPromptsEnabled = Boolean(result.skipPromptsEnabled);
+      const skipCount = Number.isFinite(Number(result.skipPromptsCount))
+        ? Number(result.skipPromptsCount)
+        : 0;
+      skipPromptsEnabled.checked = isSkipPromptsEnabled;
+      skipPromptsSelect.value = String(skipCount);
+      updateSkipPromptsVisibility(isSkipPromptsEnabled);
     });
   }
   
@@ -275,6 +304,17 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.storage.local.set({
       delayExecutionEnabled: Boolean(enabled),
       delayProfile: profile || 'balanced'
+    });
+  }
+
+  function updateSkipPromptsVisibility(isEnabled) {
+    skipPromptsContainer.style.display = isEnabled ? 'block' : 'none';
+  }
+
+  function saveSkipPromptsSettings(enabled, count) {
+    chrome.storage.local.set({
+      skipPromptsEnabled: Boolean(enabled),
+      skipPromptsCount: Number(count) || 0
     });
   }
   

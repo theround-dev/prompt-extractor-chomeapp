@@ -12,7 +12,9 @@ let nextPromptScheduledAt = null;
 let nextPromptDelayReason = null;
 let automationConfig = {
   delayExecutionEnabled: false,
-  delayProfile: 'balanced'
+  delayProfile: 'balanced',
+  skipPromptsEnabled: false,
+  skipPromptsCount: 0
 };
 let throttleStrikeCount = 0;
 let throttleSignalUntil = 0;
@@ -114,7 +116,70 @@ function computeNextDelayMs() {
   return { delayMs, reason };
 }
 
-function sendNextValidPrompt(tabId) {
+function parsePromptOutputExistsResponse(payload) {
+  if (!payload) return false;
+  if (payload.exists === true) return true;
+  if (payload.success && payload.data?.exists === true) return true;
+  if (Array.isArray(payload.data) && payload.data.length > 0) return true;
+  if (payload.data && Array.isArray(payload.data.outputs) && payload.data.outputs.length > 0) return true;
+  if (Array.isArray(payload.outputs) && payload.outputs.length > 0) return true;
+  return false;
+}
+
+async function checkPromptOutputExists(prompt) {
+  if (!prompt?.id || !prompt?.brand_id || !currentBatchId) {
+    return false;
+  }
+
+  const query = new URLSearchParams({
+    prompt_id: String(prompt.id),
+    brand_id: String(prompt.brand_id),
+    batch_id: String(currentBatchId),
+    limit: '1'
+  });
+
+  const commonHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${anonKey}`,
+    'apikey': anonKey,
+    'x-client-info': 'supabase-js/2.0.0'
+  };
+
+  const getResponse = await fetch(`${API_BASE_URL}/prompt-outputs?${query.toString()}`, {
+    method: 'GET',
+    headers: commonHeaders
+  });
+
+  if (getResponse.ok) {
+    const payload = await getResponse.json();
+    return parsePromptOutputExistsResponse(payload);
+  }
+
+  if (getResponse.status !== 404 && getResponse.status !== 405) {
+    const body = await getResponse.text();
+    throw new Error(`Duplicate check failed (${getResponse.status}): ${body}`);
+  }
+
+  const existsResponse = await fetch(`${API_BASE_URL}/prompt-outputs/exists`, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: JSON.stringify({
+      prompt_id: prompt.id,
+      brand_id: prompt.brand_id,
+      batch_id: currentBatchId
+    })
+  });
+
+  if (!existsResponse.ok) {
+    const body = await existsResponse.text();
+    throw new Error(`Duplicate check fallback failed (${existsResponse.status}): ${body}`);
+  }
+
+  const existsPayload = await existsResponse.json();
+  return parsePromptOutputExistsResponse(existsPayload);
+}
+
+async function sendNextValidPrompt(tabId) {
   if (!isRunning) return;
   nextPromptScheduledAt = null;
   nextPromptDelayReason = null;
@@ -123,6 +188,17 @@ function sendNextValidPrompt(tabId) {
     try {
       validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
       const promptToSend = prompts[currentPromptIndex];
+      try {
+        const outputExists = await checkPromptOutputExists(promptToSend);
+        if (outputExists) {
+          console.log(`Skipping prompt ${promptToSend.id} because output already exists`);
+          currentPromptIndex++;
+          continue;
+        }
+      } catch (error) {
+        // Fail open: if duplicate check fails, continue running prompt.
+        console.warn(`Duplicate check failed for prompt ${promptToSend.id}, continuing execution:`, error.message);
+      }
       console.log('Sending next prompt to content script:', promptToSend);
       chrome.tabs.sendMessage(tabId, {
         type: "nextPrompt",
@@ -183,11 +259,20 @@ const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     // Load saved settings
-    chrome.storage.local.get(['promptSource', 'selectedBatchId', 'delayExecutionEnabled', 'delayProfile'], async function(result) {
+    chrome.storage.local.get([
+      'promptSource',
+      'selectedBatchId',
+      'delayExecutionEnabled',
+      'delayProfile',
+      'skipPromptsEnabled',
+      'skipPromptsCount'
+    ], async function(result) {
       promptSource = result.promptSource || 'local';
       currentBatchId = result.selectedBatchId;
       automationConfig.delayExecutionEnabled = Boolean(result.delayExecutionEnabled);
       automationConfig.delayProfile = result.delayProfile || 'balanced';
+      automationConfig.skipPromptsEnabled = Boolean(result.skipPromptsEnabled);
+      automationConfig.skipPromptsCount = Number(result.skipPromptsCount) || 0;
       
       if (promptSource === 'local') {
         await loadLocalPrompts();
@@ -435,7 +520,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!isRunning) {
       startAutomation(request.promptSource, request.batchId, {
         delayExecutionEnabled: request.delayExecutionEnabled,
-        delayProfile: request.delayProfile
+        delayProfile: request.delayProfile,
+        skipPromptsEnabled: request.skipPromptsEnabled,
+        skipPromptsCount: request.skipPromptsCount
       }).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {
@@ -495,11 +582,23 @@ async function startAutomation(source = 'local', batchId = null, config = {}) {
           ? config.delayExecutionEnabled
           : automationConfig.delayExecutionEnabled
       ),
-      delayProfile: config.delayProfile || automationConfig.delayProfile || 'balanced'
+      delayProfile: config.delayProfile || automationConfig.delayProfile || 'balanced',
+      skipPromptsEnabled: Boolean(
+        config.skipPromptsEnabled !== undefined
+          ? config.skipPromptsEnabled
+          : automationConfig.skipPromptsEnabled
+      ),
+      skipPromptsCount: Number(
+        config.skipPromptsCount !== undefined
+          ? config.skipPromptsCount
+          : automationConfig.skipPromptsCount
+      ) || 0
     };
     chrome.storage.local.set({
       delayExecutionEnabled: automationConfig.delayExecutionEnabled,
-      delayProfile: automationConfig.delayProfile
+      delayProfile: automationConfig.delayProfile,
+      skipPromptsEnabled: automationConfig.skipPromptsEnabled,
+      skipPromptsCount: automationConfig.skipPromptsCount
     });
     
     // Load prompts based on source
@@ -513,6 +612,12 @@ async function startAutomation(source = 'local', batchId = null, config = {}) {
     
     if (prompts.length === 0) {
       throw new Error('No prompts available');
+    }
+
+    if (automationConfig.skipPromptsEnabled) {
+      const skipOffset = Math.max(0, automationConfig.skipPromptsCount);
+      currentPromptIndex = Math.min(skipOffset, prompts.length);
+      console.log(`[skip-prompts] enabled, starting at prompt index ${currentPromptIndex}`);
     }
     
     // Log automation summary
@@ -578,18 +683,7 @@ async function startAutomation(source = 'local', batchId = null, config = {}) {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    // Validate first prompt has brand_id before sending
-    console.log("FIRST PROMPT", prompts[currentPromptIndex]);
-    validatePromptBrandId(prompts[currentPromptIndex], currentPromptIndex);
-    
-    // Start with first prompt
-    console.log('Sending first prompt to content script:', prompts[currentPromptIndex]);
-    console.log('First prompt brand_id:', prompts[currentPromptIndex]?.brand_id);
-    chrome.tabs.sendMessage(targetTab.id, {
-      type: "nextPrompt",
-      prompt: prompts[currentPromptIndex],
-      automationConfig
-    });
+    await sendNextValidPrompt(targetTab.id);
     
   } catch (error) {
     console.error('Error starting automation:', error);
