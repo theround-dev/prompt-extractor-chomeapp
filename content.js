@@ -141,7 +141,9 @@ async function submitPrompt(prompt) {
     if (stopProcessing) return;
     
     // Wait for response
-    let finalResponse = await waitForResponse(prompt, promptText);
+    const mainResponseResult = await waitForResponse(prompt, promptText);
+    let finalResponse = mainResponseResult?.response || '';
+    let mainResponseCaptureMethod = mainResponseResult?.captureMethod || 'unknown';
     if (stopProcessing) return;
 
     // Validation: ensure response is not the same as prompt (retry up to 3 times)
@@ -156,6 +158,7 @@ async function submitPrompt(prompt) {
         await new Promise(resolve => setTimeout(resolve, 2500)); // Wait for page to finish rendering
         try {
           finalResponse = await extractResponseFromPage();
+          mainResponseCaptureMethod = 'dom_extraction_retry';
         } catch (err) {
           logError('Error during retry extraction:', err);
         }
@@ -203,7 +206,11 @@ async function submitPrompt(prompt) {
       approved: prompt.approved,
       active: prompt.active,
       createdAt: prompt.created_at,
-      metadata: metadataResponse
+      metadata: {
+        ...(metadataResponse && typeof metadataResponse === "object" ? metadataResponse : {}),
+        main_response_capture_method: mainResponseCaptureMethod,
+        url: window.location.href
+      }
     };
 
     chrome.runtime.sendMessage(messageData);
@@ -392,8 +399,12 @@ async function waitForResponse(prompt, promptText, options = {}) {
       // Try to get markdown content using copy button, fallback to normal text
       const markdown = await siteHandler.extractMarkdownViaCopyButton();
       const finalResponse = (markdown || response).trim();
+      const captureMethod = markdown ? 'copy_button_markdown' : 'dom_extraction';
       
-      resolve(finalResponse);
+      resolve({
+        response: finalResponse,
+        captureMethod
+      });
     };
     
     const checkResponseStability = async () => {
@@ -576,11 +587,29 @@ Please ensure all values are exactly as specified in the options above. For stri
     log('Submitting follow-up question...');
     submitButton.click();
     
-    const metadataResponse = await waitForResponse(originalPrompt, originalResponse, { isFollowUp: true });
+    const metadataResult = await waitForResponse(originalPrompt, originalResponse, { isFollowUp: true });
+    const metadataResponse = metadataResult?.response;
+    const metadataCaptureMethod = metadataResult?.captureMethod || 'unknown';
     
     if (metadataResponse) {
       log('Follow-up response received, returning metadata...');
-      return metadataResponse.trim();
+      const trimmedMetadata = metadataResponse.trim();
+      try {
+        const parsedMetadata = JSON.parse(trimmedMetadata);
+        if (parsedMetadata && typeof parsedMetadata === 'object') {
+          return {
+            ...parsedMetadata,
+            metadata_response_capture_method: metadataCaptureMethod
+          };
+        }
+      } catch (error) {
+        log('Follow-up metadata was not valid JSON, storing as raw text');
+      }
+
+      return {
+        metadata_raw_response: trimmedMetadata,
+        metadata_response_capture_method: metadataCaptureMethod
+      };
     }
     
     return null;
