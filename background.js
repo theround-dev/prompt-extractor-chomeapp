@@ -341,6 +341,7 @@ async function loadBatchPrompts(batchId) {
     }
     
     const batchData = await batchResponse.json();
+    // console.log('Batch data:', batchData);
     
     if (!batchData.success || !batchData.data) {
       throw new Error('Failed to load batch data');
@@ -353,10 +354,10 @@ async function loadBatchPrompts(batchId) {
     }
     
     // Extract brand_id from batch config or metadata
-    const brandId = batch.config?.brand_id || batch.config?.brand || batch.batch_metadata?.brand_id;
+    const brandId = batch?.brand_id;
     
-    console.log('Batch config:', batch.config);
-    console.log('Extracted brand_id:', brandId);
+    // console.log('Batch config:', batch.config);
+    // console.log('Extracted brand_id:', brandId);
     
     if (!brandId) {
       throw new Error('No brand_id found in batch configuration');
@@ -561,6 +562,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.error('Failed to download responses:', error);
       sendResponse({ success: false, error: error.message });
     }
+  } else if (request.type === "fetchBatchPromptStatus") {
+    (async () => {
+      try {
+        if (!request.batchId) {
+          throw new Error('No batch selected');
+        }
+
+        await loadBatchPrompts(request.batchId);
+
+        const promptsLeft = Math.max(prompts.length - currentPromptIndex, 0);
+        sendResponse({
+          success: true,
+          batchId: request.batchId,
+          totalPrompts: prompts.length,
+          currentPromptIndex,
+          promptsLeft
+        });
+      } catch (error) {
+        console.error('Failed to fetch batch prompt status:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
   }
 });
 

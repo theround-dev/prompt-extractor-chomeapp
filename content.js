@@ -1,14 +1,16 @@
+// Global runtime state for the current tab/session.
 let isProcessing = false;
 let responseObserver = null;
 let siteHandler = null;
 let stopProcessing = false;
+// Tunable anti-detection behavior controlled from the extension UI.
 let automationConfig = {
   delayExecutionEnabled: false,
   delayProfile: 'balanced'
 };
 let lastThrottleSignalAt = 0;
 
-// Configuration
+// Script-level feature flags and defaults.
 const CONFIG = {
   createFreshWindow: true,
   freshWindowTimeout: 5000,
@@ -16,7 +18,7 @@ const CONFIG = {
   debug: true // Toggle debug logging
 };
 
-// Utility functions
+// Lightweight logging wrappers so debug verbosity can be toggled in one place.
 const log = (message, ...args) => {
   if (CONFIG.debug) console.log(message, ...args);
 };
@@ -25,7 +27,8 @@ const logError = (message, ...args) => {
   console.error(message, ...args);
 };
 
-// Response validation helpers
+// Best-effort response extraction helper used by retry logic.
+// Prefers markdown via site copy controls when available, then falls back to raw text extraction.
 async function extractResponseFromPage() {
   const response = await siteHandler.extractLatestResponse();
   const markdown = await siteHandler.extractMarkdownViaCopyButton();
@@ -39,7 +42,7 @@ function responseMatchesPrompt(response, promptText) {
   return r === p;
 }
 
-// Site detection and initialization
+// Detects which supported AI chat surface is currently loaded and binds the matching handler.
 function detectSiteAndInitialize() {
   const hostname = window.location.hostname;
   log('Detected hostname:', hostname);
@@ -57,13 +60,16 @@ function detectSiteAndInitialize() {
   return true;
 }
 
-// Initialize and notify background script
+// Initialize once on content script load and notify background that this tab is ready.
 if (!detectSiteAndInitialize()) {
   logError('Failed to initialize site handler');
 }
 chrome.runtime.sendMessage({ type: "ready" });
 
-// Message listener
+// Primary message contract with background.js.
+// - nextPrompt: run full prompt automation pipeline
+// - stopProcessing: cancel current in-flight work
+// - ready: health check
 chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
   log('Content script received:', request.type);
   
@@ -93,7 +99,12 @@ chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
   }
 });
 
-// Core prompt submission function
+// End-to-end prompt lifecycle:
+// 1) prepare page/input
+// 2) submit prompt
+// 3) wait and validate response
+// 4) optionally ask follow-up metadata question
+// 5) send normalized payload to background for persistence
 async function submitPrompt(prompt) {
   try {
     isProcessing = true;
@@ -146,7 +157,8 @@ async function submitPrompt(prompt) {
     let mainResponseCaptureMethod = mainResponseResult?.captureMethod || 'unknown';
     if (stopProcessing) return;
 
-    // Validation: ensure response is not the same as prompt (retry up to 3 times)
+    // Validation guard: some providers briefly echo the prompt before final generation.
+    // If we detect an echo, re-extract a few times before deciding to skip persistence.
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (stopProcessing) return;
@@ -178,7 +190,7 @@ async function submitPrompt(prompt) {
       return;
     }
 
-    // Handle follow-up question if enabled
+    // Optional second turn to extract machine-readable metadata about the answer.
     let metadataResponse = null;
     if (CONFIG.enableFollowUpQuestions) {
       try {
@@ -190,7 +202,8 @@ async function submitPrompt(prompt) {
 
     if (stopProcessing) return;
 
-    // Send response back
+    // Persistable payload sent back to extension runtime.
+    // Metadata always includes capture method + page URL for later diagnostics/auditing.
     const messageData = {
       type: "saveResponse",
       prompt: prompt.text || prompt,
@@ -226,7 +239,9 @@ async function submitPrompt(prompt) {
   }
 }
 
-// Helper functions
+// --- Page interaction helpers ------------------------------------------------
+
+// Waits for full document load plus a small settling delay so dynamic chat UIs finish hydration.
 async function waitForPageReady() {
   log('Waiting for page to be fully ready...');
   
@@ -352,6 +367,10 @@ async function waitForResponse(prompt, promptText, options = {}) {
   const config = { ...defaultOptions, ...options };
   const responseType = config.isFollowUp ? 'follow-up' : 'main';
   
+  // Wait strategy combines:
+  // - mutation observation (detect active streaming)
+  // - periodic stability checks (decide completion)
+  // - hard timeout + fallback timeout (avoid hanging forever)
   return new Promise((resolve, reject) => {
     let responseObserver = null;
     let stabilityCheck = null;
@@ -386,6 +405,8 @@ async function waitForResponse(prompt, promptText, options = {}) {
     
     log(`Starting to wait for ${siteHandler.siteName} ${responseType} response...`);
     
+    // Finalizes response once we believe generation is complete.
+    // We deliberately re-check copy-button markdown at capture time to prefer richer formatting.
     const handleResponse = async (response, source) => {
       if (isResolved) return;
       
@@ -407,6 +428,8 @@ async function waitForResponse(prompt, promptText, options = {}) {
       });
     };
     
+    // Determines whether streaming output has stabilized enough to capture.
+    // We require multiple stable checks to reduce premature capture risk.
     const checkResponseStability = async () => {
       if (isResolved || stopProcessing) return;
       detectAndReportThrottleModal();
@@ -447,6 +470,7 @@ async function waitForResponse(prompt, promptText, options = {}) {
         } else {
           const changeRatio = Math.abs(currentText.length - lastResponseText.length) / Math.max(currentText.length, lastResponseText.length);
           
+          // Treat tiny length increases as "effectively stable" to tolerate token-by-token tails.
           if (changeRatio < 0.05 && currentText.length > lastResponseText.length) {
             stableCount++;
             log(`Small change detected on ${siteHandler.siteName} ${responseType} (${changeRatio.toFixed(3)}), counting as stable: ${stableCount}/${config.requiredStableChecks}`);
@@ -485,6 +509,7 @@ async function waitForResponse(prompt, promptText, options = {}) {
       }
     };
     
+    // Track latest observed response text whenever the chat DOM mutates.
     responseObserver = new MutationObserver(async (mutations) => {
       if (stopProcessing) {
         cleanup();
@@ -536,6 +561,7 @@ async function handleFollowUpQuestion(originalPrompt, originalResponse) {
     
     if (stopProcessing) return null;
     
+    // Prompt asks the provider to self-report quality/model context in strict JSON for storage.
     const followUpPrompt = `Please analyze my previous response in this conversation and return the following structured metadata as JSON:
 
 {
@@ -603,6 +629,7 @@ Please ensure all values are exactly as specified in the options above. For stri
           };
         }
       } catch (error) {
+        // Non-JSON responses are retained so we can inspect provider drift/bad formatting later.
         log('Follow-up metadata was not valid JSON, storing as raw text');
       }
 
@@ -749,14 +776,14 @@ function detectAndReportThrottleModal() {
   return isThrottle;
 }
 
-// Event listeners
+// Cleanup observers when navigating away to avoid orphaned MutationObservers.
 window.addEventListener('beforeunload', () => {
   if (responseObserver) {
     responseObserver.disconnect();
   }
 });
 
-// Manual testing function
+// Manual debug utility exposed on window for local testing from DevTools console.
 async function testPromptSetting(prompt = "test prompt") {
   log('=== Manual Prompt Setting Test ===');
   const input = await siteHandler.findInputField();
