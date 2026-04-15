@@ -220,7 +220,9 @@ document.addEventListener('DOMContentLoaded', function() {
           const option = document.createElement('option');
           option.value = batch.id;
           const date = new Date(batch.started_at).toLocaleDateString();
-          option.textContent = `${batch.name} (${batch.status}) - ${date}`;
+          const brandName = batch.brand?.name || 'Unknown Brand';
+          const batchName = batch.name || 'Unnamed Batch';
+          option.textContent = `${brandName} | ${batchName} | ${date}`;
           batchSelect.appendChild(option);
         });
         
