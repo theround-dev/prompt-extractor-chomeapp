@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const batchSelector = document.getElementById('batchSelector');
   const batchSelect = document.getElementById('batchSelect');
   const refreshBatchesBtn = document.getElementById('refreshBatches');
+  const fetchBatchDataBtn = document.getElementById('fetchBatchData');
+  const fetchBatchPromptStatusBtn = document.getElementById('fetchBatchPromptStatus');
   const batchLoading = document.getElementById('batchLoading');
   const delayExecutionEnabled = document.getElementById('delayExecutionEnabled');
   const delayProfileContainer = document.getElementById('delayProfileContainer');
@@ -67,6 +69,19 @@ document.addEventListener('DOMContentLoaded', function() {
     loadBatches();
   });
 
+  // Optional batch fetch buttons (guarded to avoid popup init crashes if markup changes).
+  if (fetchBatchDataBtn) {
+    fetchBatchDataBtn.addEventListener('click', function() {
+      fetchBatchPromptStatus();
+    });
+  }
+
+  if (fetchBatchPromptStatusBtn) {
+    fetchBatchPromptStatusBtn.addEventListener('click', function() {
+      fetchBatchPromptStatus();
+    });
+  }
+
   delayExecutionEnabled.addEventListener('change', function() {
     updateDelayProfileVisibility(this.checked);
     saveDelaySettings(this.checked, delayProfileSelect.value);
@@ -87,6 +102,7 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Start button click
   startBtn.addEventListener('click', function() {
+    console.log('Starting automation...');
     const promptSource = document.querySelector('input[name="promptSource"]:checked').value;
     
     if (promptSource === 'batch' && !batchSelect.value) {
@@ -204,7 +220,9 @@ document.addEventListener('DOMContentLoaded', function() {
           const option = document.createElement('option');
           option.value = batch.id;
           const date = new Date(batch.started_at).toLocaleDateString();
-          option.textContent = `${batch.name} (${batch.status}) - ${date}`;
+          const brandName = batch.brand?.name || 'Unknown Brand';
+          const batchName = batch.name || 'Unnamed Batch';
+          option.textContent = `${brandName} | ${batchName} | ${date}`;
           batchSelect.appendChild(option);
         });
         
@@ -317,6 +335,35 @@ document.addEventListener('DOMContentLoaded', function() {
       skipPromptsCount: Number(count) || 0
     });
   }
+
+  function fetchBatchPromptStatus() {
+    const selectedBatchId = batchSelect.value;
+    if (!selectedBatchId) {
+      status.textContent = 'Please select a batch first';
+      status.className = 'status stopped';
+      progress.style.display = 'none';
+      return;
+    }
+
+    status.textContent = 'Fetching batch prompt data...';
+    status.className = 'status running';
+
+    chrome.runtime.sendMessage({
+      type: 'fetchBatchPromptStatus',
+      batchId: selectedBatchId
+    }, function(response) {
+      if (response && response.success) {
+        status.textContent = `Batch loaded: ${response.totalPrompts} prompts`;
+        status.className = 'status running';
+        progress.style.display = 'block';
+        progressText.textContent = `Prompts left: ${response.promptsLeft}`;
+      } else {
+        status.textContent = 'Failed to fetch batch data: ' + (response?.error || 'Unknown error');
+        status.className = 'status stopped';
+        progress.style.display = 'none';
+      }
+    });
+  }
   
   function updateStatus() {
     chrome.runtime.sendMessage({ type: 'getStatus' }, function(response) {
@@ -341,7 +388,13 @@ document.addEventListener('DOMContentLoaded', function() {
         stopBtn.style.display = 'none';
         startBtn.disabled = false;
         stopBtn.disabled = false; // Reset stop button state
-        progress.style.display = 'none';
+        if (response?.promptSource === 'batch' && Number(response?.totalPrompts) > 0) {
+          const promptsLeft = Math.max(Number(response.totalPrompts) - Number(response.currentPromptIndex || 0), 0);
+          progress.style.display = 'block';
+          progressText.textContent = `Prompts left: ${promptsLeft}`;
+        } else {
+          progress.style.display = 'none';
+        }
         delayIndicator.style.display = 'none';
       }
     });
